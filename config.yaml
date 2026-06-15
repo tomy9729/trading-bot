@@ -1,0 +1,109 @@
+market:
+  korea:
+    enabled: true
+    regular_open: "09:00"
+    regular_close: "15:30"
+    stop_new_buy_before_close_minutes: 10
+    force_sell_before_close_minutes: 10
+    entry_windows:
+      - ["09:10", "11:00"]
+      - ["13:30", "14:40"]
+    watchlist:
+      - "005930"
+
+  us:
+    enabled: true
+    regular_open: "09:30"
+    regular_close: "16:00"
+    timezone: "America/New_York"
+    entry_start_after_open_minutes: 15
+    entry_stop_before_close_minutes: 30
+    watchlist:
+      - symbol: "QQQ"
+        quote_exchange: "NAS"
+        order_exchange: "NASD"
+      - symbol: "SPY"
+        quote_exchange: "AMS"
+        order_exchange: "AMEX"
+      - symbol: "SOXX"
+        quote_exchange: "NAS"
+        order_exchange: "NASD"
+      - symbol: "SMH"
+        quote_exchange: "NAS"
+        order_exchange: "NASD"
+      - symbol: "XLK"
+        quote_exchange: "AMS"
+        order_exchange: "AMEX"
+      - symbol: "VOO"
+        quote_exchange: "AMS"
+        order_exchange: "AMEX"
+
+strategy:
+  name: "vwap-volume-breakout-scalping"
+  volume_multiplier: 2.0
+  breakout_window_minutes: 5
+  volume_lookback_minutes: 5
+  vwap_hold_candles: 3
+  max_daily_rise_percent: 15.0
+  previous_candle_max_drop_percent: -2.0
+  min_execution_strength: 55.0
+  max_spread_percent: 0.3
+  max_upper_wick_percent: 45.0
+  market_down_block_threshold_percent: -0.5
+
+risk:
+  max_buy_amount_per_trade: 100000
+  us_order_amount_krw: 20000
+  us_total_test_capital_krw: 100000
+  us_max_symbol_exposure_krw: 50000
+  us_assumed_usd_krw_rate: 1400
+  us_fee_buffer_rate: 0.005
+  us_order_mode: fractional_amount
+  us_fractional_order_enabled: false
+  us_max_buy_amount_per_trade_usd: 15
+  max_daily_loss: 5000
+  max_daily_loss_percent: -1.5
+  max_daily_trade_count: 5
+  max_position_count: 2
+  take_profit_percent: 0.8
+  second_take_profit_percent: 1.7
+  partial_take_profit_ratio: 0.5
+  stop_loss_percent: -0.7
+  break_even_stop_percent: 0.0
+  stale_position_minutes: 5
+  stale_position_min_profit_percent: 0.5
+  unfilled_order_timeout_seconds: 30
+  reentry_cooldown_minutes: 15
+
+watchlist:
+  kr:
+    enabled: true
+    mode: dynamic
+    top_trading_value_limit: 50
+    refresh_interval_seconds: 180
+    exclude_vi_after_minutes: 10
+    exclude_warning_stocks: true
+    exclude_managed_stocks: true
+    exclude_suspended_stocks: true
+    min_price: 1000
+    max_spread_rate: 0.3
+    min_orderbook_depth: 10000000
+
+  us:
+    enabled: true
+    mode: static
+    base_symbols:
+      - SPY
+      - QQQ
+      - SOXX
+      - SMH
+      - XLK
+      - VOO
+    optional_symbols:
+      - NVDA
+      - AAPL
+      - MSFT
+    use_optional_symbols: false
+    max_spread_rate: 0.2
+    exclude_premarket: true
+    exclude_aftermarket: true
