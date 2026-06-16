@@ -1,8 +1,10 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
     @param path: YAML config path.
     @returns: Parsed bot config.
     """
+    load_dotenv()
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("config.yaml must contain a mapping")
@@ -167,7 +170,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             previous_candle_max_drop_percent=float(strategy.get("previous_candle_max_drop_percent", -2.0)),
             min_execution_strength=float(strategy.get("min_execution_strength", 55.0)),
             max_spread_percent=float(strategy.get("max_spread_percent", 0.3)),
-            max_upper_wick_percent=float(strategy.get("max_upper_wick_percent", 45.0)),
+            max_upper_wick_percent=_get_float_env("MAX_UPPER_WICK_PERCENT", float(strategy.get("max_upper_wick_percent", 45.0))),
             market_down_block_threshold_percent=float(strategy.get("market_down_block_threshold_percent", -0.5)),
         ),
         risk=RiskConfig(
@@ -239,6 +242,13 @@ def _get_dict(data: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"config.{key} must be a mapping")
     return value
+
+
+def _get_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    return float(value)
 
 
 def _create_entry_windows(items: Any) -> tuple[tuple[str, str], ...]:

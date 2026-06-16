@@ -26,6 +26,7 @@ MAX_ORDER_AMOUNT=100000
 MAX_POSITION_COUNT=1
 DAILY_MAX_LOSS_RATE=-2.0
 DAILY_MAX_LOSS_AMOUNT=20000
+MAX_UPPER_WICK_PERCENT=45.0
 KIS_MIN_REQUEST_INTERVAL_SECONDS=0.5
 KIS_RATE_LIMIT_RETRY_SECONDS=1.0
 KIS_RATE_LIMIT_MAX_ATTEMPTS=3
@@ -60,7 +61,7 @@ python main.py --mode monitor --interval-seconds 60
 - 최근 1분 거래량이 직전 `volume_lookback_minutes`분 평균 거래량의 `volume_multiplier`배 이상
 - 현재가가 직전 박스권 상단, 기본 직전 5분 고점, 돌파
 - 직전 캔들이 급락 캔들이 아님
-- 윗꼬리 비율이 `max_upper_wick_percent` 이하
+- 윗꼬리 비율이 `max_upper_wick_percent` 이하. `.env`의 `MAX_UPPER_WICK_PERCENT`가 있으면 이 값이 우선 적용됨
 - 체결강도 프록시가 `min_execution_strength` 이상
 - 호가 스프레드가 `max_spread_percent` 이하
 - 시장 방향 프록시가 급락 상태가 아님
