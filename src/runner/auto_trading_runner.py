@@ -2,16 +2,12 @@ import time
 from dataclasses import dataclass, field
 from dataclasses import replace
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_DOWN
 from typing import Dict
 
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
-from src.broker.kis_overseas_account import KisOverseasAccount
-from src.broker.kis_overseas_market import KisOverseasMarket
-from src.broker.kis_overseas_order import KisOverseasOrder
-from src.config.bot_config import BotConfig, UsWatchItem
+from src.config.bot_config import BotConfig
 from src.config.env import Settings
 from src.domain.position import Position, PositionState
 from src.logs.trade_logger import get_trade_logger
@@ -19,7 +15,7 @@ from src.risk.risk_manager import RiskManager, RiskState
 from src.runner.dry_run_runner import calculate_order_quantity
 from src.runner.market_hours import MarketHours
 from src.strategy.advanced_signals import EntrySignal, ExitSignal, MarketFilter, SymbolFilter
-from src.strategy.market_snapshot_builder import MarketSnapshotBuilder, parse_domestic_candles, parse_overseas_candles
+from src.strategy.market_snapshot_builder import MarketSnapshotBuilder, parse_domestic_candles
 from src.watchlist.watchlist_manager import WatchlistManager
 
 
@@ -30,8 +26,6 @@ class AutoTradingState:
     pending_order_symbols: set[str] = field(default_factory=set)
     partial_profit_taken_symbols: set[str] = field(default_factory=set)
     last_exit_at_by_symbol: Dict[str, datetime] = field(default_factory=dict)
-    us_invested_krw_by_symbol: Dict[str, int] = field(default_factory=dict)
-    us_total_invested_krw: int = 0
     daily_loss_amount: int = 0
     consecutive_loss_count: int = 0
     stopped_new_order: bool = False
@@ -46,9 +40,6 @@ class AutoTradingRunner:
         domestic_market: KisMarket,
         domestic_account: KisAccount,
         domestic_order: KisOrder,
-        overseas_market: KisOverseasMarket,
-        overseas_account: KisOverseasAccount,
-        overseas_order: KisOverseasOrder,
         watchlist_manager: WatchlistManager,
     ):
         self.settings = replace(
@@ -62,9 +53,6 @@ class AutoTradingRunner:
         self.domestic_market = domestic_market
         self.domestic_account = domestic_account
         self.domestic_order = domestic_order
-        self.overseas_market = overseas_market
-        self.overseas_account = overseas_account
-        self.overseas_order = overseas_order
         self.watchlist_manager = watchlist_manager
         self.snapshot_builder = MarketSnapshotBuilder(bot_config.strategy)
         self.risk_manager = RiskManager(self.settings, bot_config.risk.max_daily_trade_count)
@@ -86,18 +74,13 @@ class AutoTradingRunner:
             time.sleep(interval_seconds)
 
     def run_once(self) -> None:
-        """Run one automatic trading cycle for enabled markets."""
+        """Run one automatic domestic trading cycle."""
         self._reset_daily_state_if_needed()
         if self.bot_config.korea.enabled:
             if self.market_hours.is_domestic_open():
                 self._run_domestic_cycle()
             else:
                 self.logger.info("[AUTO WAIT] market=domestic")
-        if self.bot_config.us.enabled:
-            if self.market_hours.is_us_open():
-                self._run_us_cycle()
-            else:
-                self.logger.info("[AUTO WAIT] market=us")
 
     def _run_domestic_cycle(self) -> None:
         self._sync_domestic_positions()
@@ -121,28 +104,6 @@ class AutoTradingRunner:
             except Exception:
                 self.state.stopped_new_order = True
                 self.logger.exception("[AUTO DOMESTIC CYCLE FAILED] symbol=%s", symbol)
-
-    def _run_us_cycle(self) -> None:
-        self._sync_us_positions()
-        self.watchlist_manager.refresh("US")
-        for item in self._get_us_cycle_items():
-            try:
-                snapshot = self._build_us_snapshot(item)
-                position = self.state.positions.get(item.symbol)
-                if position is not None:
-                    self._handle_us_sell(item, position, snapshot)
-                    continue
-                if not self.watchlist_manager.is_watchable("US", item.symbol):
-                    reason = self.watchlist_manager.get_exclude_reason("US", item.symbol) or "not_in_watchlist"
-                    self.logger.info("[BUY SKIP] market=US symbol=%s name=%r skip_reason=%s", item.symbol, self._get_symbol_name("US", item.symbol), reason)
-                    continue
-                if not self._is_reentry_allowed(item.symbol):
-                    self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=REENTRY_COOLDOWN", item.symbol, self._get_symbol_name("US", item.symbol))
-                    continue
-                self._handle_us_buy(item, snapshot, self._is_us_new_buy_blocked())
-            except Exception:
-                self.state.stopped_new_order = True
-                self.logger.exception("[AUTO US CYCLE FAILED] symbol=%s", item.symbol)
 
     def _handle_domestic_buy(self, symbol: str, snapshot, is_new_buy_blocked: bool = False) -> None:
         name = self._get_symbol_name("KR", symbol)
@@ -168,25 +129,6 @@ class AutoTradingRunner:
             return
         self._place_domestic_buy(symbol, quantity, snapshot.current_price)
 
-    def _handle_us_buy(self, item: UsWatchItem, snapshot, is_new_buy_blocked: bool = False) -> None:
-        name = self._get_symbol_name("US", item.symbol)
-        if self.state.stopped_new_order:
-            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NEW_ORDER_STOPPED", item.symbol, name)
-            return
-        signal = self.entry_signal.evaluate("US", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
-        self.logger.info("[BUY CHECK] market=us symbol=%s name=%r signal=%s", item.symbol, name, signal)
-        if not signal.allowed:
-            return
-        if is_new_buy_blocked:
-            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", item.symbol, name)
-            return
-        available_cash = self.overseas_account.get_available_cash(item.symbol, snapshot.current_price, item.order_exchange)
-        quantity = self._calculate_us_order_quantity(item.symbol, snapshot.current_price, available_cash)
-        if quantity <= 0:
-            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NO_ORDER_QUANTITY available_cash=%s", item.symbol, name, available_cash)
-            return
-        self._place_us_buy(item, quantity, snapshot.current_price)
-
     def _handle_domestic_sell(self, position: Position, snapshot) -> None:
         signal = self.exit_signal.evaluate(
             position,
@@ -198,16 +140,6 @@ class AutoTradingRunner:
         self.logger.info("[SELL CHECK] market=domestic symbol=%s name=%r signal=%s", position.symbol, self._get_symbol_name("KR", position.symbol), signal)
         if signal.allowed:
             self._place_domestic_exit(position.symbol, position.quantity, signal.reason)
-
-    def _handle_us_sell(self, item: UsWatchItem, position: Position, snapshot) -> None:
-        signal = self.exit_signal.evaluate(
-            position,
-            snapshot,
-            partial_taken=position.symbol in self.state.partial_profit_taken_symbols,
-        )
-        self.logger.info("[SELL CHECK] market=us symbol=%s name=%r signal=%s", position.symbol, self._get_symbol_name("US", position.symbol), signal)
-        if signal.allowed:
-            self._place_us_exit(item, position.quantity, snapshot.current_price, signal.reason)
 
     def _place_domestic_buy(self, symbol: str, quantity: int, price: int) -> None:
         self.state.pending_order_symbols.add(symbol)
@@ -232,42 +164,6 @@ class AutoTradingRunner:
         finally:
             self.state.pending_order_symbols.discard(symbol)
 
-    def _place_us_buy(self, item: UsWatchItem, quantity: Decimal, price: int | float) -> None:
-        self.state.pending_order_symbols.add(item.symbol)
-        try:
-            if (
-                quantity != quantity.to_integral_value()
-                and not self.settings.dry_run
-                and not self.bot_config.risk.us_fractional_order_enabled
-            ):
-                raise RuntimeError("US fractional order is calculated but live fractional API is not enabled.")
-            response = self.overseas_order.buy_limit(item.symbol, quantity, float(price), item.order_exchange)
-            self.state.daily_entry_count_by_symbol[item.symbol] = self.state.daily_entry_count_by_symbol.get(item.symbol, 0) + 1
-            self.state.positions[item.symbol] = Position(symbol=item.symbol, quantity=float(quantity), average_price=price, entry_time=datetime.now())
-            order_krw = min(
-                self.bot_config.risk.us_order_amount_krw,
-                self.bot_config.risk.us_total_test_capital_krw - self.state.us_total_invested_krw,
-                self.bot_config.risk.us_max_symbol_exposure_krw - self.state.us_invested_krw_by_symbol.get(item.symbol, 0),
-            )
-            self.state.us_total_invested_krw += max(order_krw, 0)
-            self.state.us_invested_krw_by_symbol[item.symbol] = self.state.us_invested_krw_by_symbol.get(item.symbol, 0) + max(order_krw, 0)
-            self.logger.info("[BUY DONE] market=US symbol=%s name=%r entry_price=%s quantity=%s response=%s", item.symbol, self._get_symbol_name("US", item.symbol), price, quantity, response)
-        finally:
-            self.state.pending_order_symbols.discard(item.symbol)
-
-    def _place_us_exit(self, item: UsWatchItem, quantity: int, price: int | float, reason: str) -> None:
-        sell_quantity = self._exit_quantity(item.symbol, quantity, reason)
-        if sell_quantity < 1:
-            self.logger.info("[SELL SKIP] market=US symbol=%s reason=NO_SELL_QUANTITY", item.symbol)
-            return
-        self.state.pending_order_symbols.add(item.symbol)
-        try:
-            response = self.overseas_order.sell_limit(item.symbol, sell_quantity, float(price), item.order_exchange)
-            self._update_position_after_exit(item.symbol, sell_quantity, reason)
-            self.logger.info("[SELL DONE] market=US symbol=%s name=%r exit_price=%s quantity=%s reason=%s response=%s", item.symbol, self._get_symbol_name("US", item.symbol), price, sell_quantity, reason, response)
-        finally:
-            self.state.pending_order_symbols.discard(item.symbol)
-
     def _build_domestic_snapshot(self, symbol: str):
         rows = self.domestic_market.get_minute_chart(symbol)
         candles = parse_domestic_candles(rows)
@@ -275,25 +171,9 @@ class AutoTradingRunner:
         orderbook = self.domestic_market.get_orderbook(symbol)
         return self.snapshot_builder.build(symbol, candles, price, float(orderbook["spread_rate"]))
 
-    def _build_us_snapshot(self, item: UsWatchItem):
-        rows = self.overseas_market.get_minute_chart(item.symbol, item.quote_exchange)
-        candles = parse_overseas_candles(rows)
-        price = self.overseas_market.get_current_price(item.symbol, item.quote_exchange)
-        orderbook = self.overseas_market.get_orderbook(item.symbol, item.quote_exchange)
-        return self.snapshot_builder.build(item.symbol, candles, price, float(orderbook["spread_rate"]))
-
     def _get_domestic_cycle_symbols(self) -> list[str]:
-        domestic_position_symbols = [symbol for symbol in self.state.positions if _is_domestic_symbol(symbol)]
-        symbols = list(dict.fromkeys(self.watchlist_manager.get_symbols("KR") + domestic_position_symbols))
+        symbols = list(dict.fromkeys(self.watchlist_manager.get_symbols("KR") + list(self.state.positions)))
         return symbols
-
-    def _get_us_cycle_items(self) -> list[UsWatchItem]:
-        item_by_symbol = {item.symbol: item for item in self.watchlist_manager.get_us_items()}
-        for symbol in self.state.positions:
-            if _is_domestic_symbol(symbol):
-                continue
-            item_by_symbol.setdefault(symbol, UsWatchItem(symbol=symbol, quote_exchange="NAS", order_exchange="NASD"))
-        return list(item_by_symbol.values())
 
     def _sync_domestic_positions(self) -> None:
         for row in self.domestic_account.get_balance():
@@ -302,15 +182,6 @@ class AutoTradingRunner:
             average_price = _to_int(row.get("pchs_avg_pric") or row.get("avg_prvs") or 0)
             if symbol and quantity > 0 and average_price > 0:
                 self.state.positions.setdefault(symbol, Position(symbol, quantity, average_price, datetime.now()))
-
-    def _sync_us_positions(self) -> None:
-        for item in self.bot_config.us.watchlist:
-            for row in self.overseas_account.get_balance(item.order_exchange, "USD"):
-                symbol = str(row.get("ovrs_pdno") or row.get("pdno") or "")
-                quantity = _to_int(row.get("ovrs_cblc_qty") or row.get("hldg_qty") or 0)
-                average_price = _to_int(float(row.get("pchs_avg_pric") or row.get("avg_unpr") or 0))
-                if symbol and quantity > 0 and average_price > 0:
-                    self.state.positions.setdefault(symbol, Position(symbol, quantity, average_price, datetime.now()))
 
     def _position_state(self) -> PositionState:
         return PositionState(positions=tuple(self.state.positions.values()))
@@ -333,21 +204,6 @@ class AutoTradingRunner:
             return True
         return not _is_in_entry_windows(now, self.bot_config.korea.entry_windows)
 
-    def _is_us_new_buy_blocked(self) -> bool:
-        now = datetime.now(self.market_hours.korea_tz)
-        if not self.market_hours.is_us_open(now):
-            return True
-        if now.time() >= _parse_time("22:30"):
-            open_time = _parse_hhmm("22:30", now)
-            close_time = _parse_hhmm("05:00", now + timedelta(days=1))
-        else:
-            open_time = _parse_hhmm("22:30", now - timedelta(days=1))
-            close_time = _parse_hhmm("05:00", now)
-        return (
-            now < open_time + timedelta(minutes=self.bot_config.us.entry_start_after_open_minutes)
-            or now >= close_time - timedelta(minutes=self.bot_config.us.entry_stop_before_close_minutes)
-        )
-
     def _is_domestic_force_sell_time(self) -> bool:
         now = datetime.now(self.market_hours.korea_tz)
         close_time = _parse_hhmm(self.bot_config.korea.regular_close, now)
@@ -358,31 +214,6 @@ class AutoTradingRunner:
         if last_exit_at is None:
             return True
         return datetime.now() - last_exit_at >= timedelta(minutes=self.bot_config.risk.reentry_cooldown_minutes)
-
-    def _calculate_us_order_quantity(self, symbol: str, current_price: int | float, available_cash: float) -> Decimal:
-        if current_price <= 0 or available_cash <= 0:
-            return Decimal("0")
-        if self.settings.force_quantity is not None:
-            return Decimal(str(self.settings.force_quantity)) if current_price * self.settings.force_quantity <= available_cash else Decimal("0")
-        if self.state.us_total_invested_krw >= self.bot_config.risk.us_total_test_capital_krw:
-            return Decimal("0")
-        if self.state.us_invested_krw_by_symbol.get(symbol, 0) >= self.bot_config.risk.us_max_symbol_exposure_krw:
-            return Decimal("0")
-        order_krw = min(
-            self.bot_config.risk.us_order_amount_krw,
-            self.bot_config.risk.us_total_test_capital_krw - self.state.us_total_invested_krw,
-            self.bot_config.risk.us_max_symbol_exposure_krw - self.state.us_invested_krw_by_symbol.get(symbol, 0),
-        )
-        if order_krw <= 0:
-            return Decimal("0")
-        usd_amount = Decimal(str(order_krw)) / Decimal(str(self.bot_config.risk.us_assumed_usd_krw_rate))
-        usd_amount = usd_amount * (Decimal("1") - Decimal(str(self.bot_config.risk.us_fee_buffer_rate)))
-        price = Decimal(str(current_price))
-        if self.bot_config.risk.us_order_mode == "whole_share_amount":
-            return (usd_amount // price).quantize(Decimal("1"))
-        if self.bot_config.risk.us_order_mode == "fractional_amount":
-            return (usd_amount / price).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
-        raise RuntimeError(f"Unsupported US order mode: {self.bot_config.risk.us_order_mode}")
 
     def _get_symbol_name(self, market: str, symbol: str) -> str | None:
         return self.watchlist_manager.get_symbol_name(market, symbol)
@@ -416,11 +247,6 @@ def _parse_hhmm(value: str, now: datetime) -> datetime:
     return now.replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
 
 
-def _parse_time(value: str):
-    hour_text, minute_text = value.split(":", 1)
-    return datetime.now().time().replace(hour=int(hour_text), minute=int(minute_text), second=0, microsecond=0)
-
-
 def _is_in_entry_windows(now: datetime, windows: tuple[tuple[str, str], ...]) -> bool:
     for start, end in windows:
         if _parse_hhmm(start, now) <= now < _parse_hhmm(end, now):
@@ -432,7 +258,3 @@ def _to_int(value) -> int:
     if value in (None, ""):
         return 0
     return int(float(str(value).replace(",", "")))
-
-
-def _is_domestic_symbol(symbol: str) -> bool:
-    return len(symbol) == 6 and symbol.isdigit()

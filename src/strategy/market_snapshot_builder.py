@@ -76,28 +76,6 @@ def parse_domestic_candles(rows: Sequence[dict[str, Any]]) -> list[MinuteCandle]
     return candles
 
 
-def parse_overseas_candles(rows: Sequence[dict[str, Any]]) -> list[MinuteCandle]:
-    """Parse KIS overseas minute candle rows.
-
-    @param rows: KIS output2 rows.
-    @returns: Parsed minute candles.
-    """
-    candles = []
-    for row in rows:
-        timestamp = str(row.get("xymd", "")) + str(row.get("xhms", row.get("tymd", "")))
-        candles.append(
-            MinuteCandle(
-                timestamp=timestamp,
-                open_price=int(_to_float(row, ("open", "oprc"))),
-                high_price=int(_to_float(row, ("high", "hgpr"))),
-                low_price=int(_to_float(row, ("low", "lwpr"))),
-                close_price=int(_to_float(row, ("last", "clos", "close"))),
-                volume=int(_to_float(row, ("evol", "tvol", "volume", "vol"))),
-            )
-        )
-    return candles
-
-
 def _sort_candles(candles: Sequence[MinuteCandle]) -> list[MinuteCandle]:
     return sorted(candles, key=lambda candle: candle.timestamp)
 

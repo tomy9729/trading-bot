@@ -24,7 +24,7 @@ class MarketFilter:
     def check_entry(self, market: str, snapshot: MarketSnapshot) -> FilterResult:
         """Check market-wide entry filters.
 
-        @param market: KR or US.
+        @param market: KR.
         @param snapshot: Current market snapshot.
         @returns: Filter result.
         """
@@ -68,7 +68,7 @@ class EntrySignal:
     ) -> Signal:
         """Evaluate strengthened common entry conditions.
 
-        @param market: KR or US.
+        @param market: KR.
         @param snapshot: Current market snapshot.
         @param position_state: Current positions.
         @param risk_state: Current risk state.

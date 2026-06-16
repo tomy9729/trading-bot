@@ -1,7 +1,6 @@
 from unittest.mock import Mock
 
 from src.broker.kis_client import KisClient
-from src.broker.kis_overseas_order import KisOverseasOrder
 from src.broker.kis_order import KisOrder
 from src.config.env import Settings
 from src.runner.dry_run_runner import calculate_order_quantity
@@ -15,14 +14,6 @@ def test_dry_run_does_not_call_order_api():
     client = KisClient(_settings(True), Mock())
     client.post = Mock()
     result = KisOrder(client).buy_market("005930", 1)
-    assert result["dry_run"] is True
-    client.post.assert_not_called()
-
-
-def test_us_dry_run_does_not_call_order_api():
-    client = KisClient(_settings(True), Mock())
-    client.post = Mock()
-    result = KisOverseasOrder(client).buy_limit("AAPL", 1, 200.0, "NASD")
     assert result["dry_run"] is True
     client.post.assert_not_called()
 

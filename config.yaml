@@ -11,33 +11,6 @@ market:
         watchlist:
             - "005930"
 
-    us:
-        enabled: false
-        regular_open: "09:30"
-        regular_close: "16:00"
-        timezone: "America/New_York"
-        entry_start_after_open_minutes: 15
-        entry_stop_before_close_minutes: 30
-        watchlist:
-            - symbol: "QQQ"
-              quote_exchange: "NAS"
-              order_exchange: "NASD"
-            - symbol: "SPY"
-              quote_exchange: "AMS"
-              order_exchange: "AMEX"
-            - symbol: "SOXX"
-              quote_exchange: "NAS"
-              order_exchange: "NASD"
-            - symbol: "SMH"
-              quote_exchange: "NAS"
-              order_exchange: "NASD"
-            - symbol: "XLK"
-              quote_exchange: "AMS"
-              order_exchange: "AMEX"
-            - symbol: "VOO"
-              quote_exchange: "AMS"
-              order_exchange: "AMEX"
-
 strategy:
     name: "vwap-volume-breakout-scalping"
     volume_multiplier: 2.0
@@ -53,14 +26,6 @@ strategy:
 
 risk:
     max_buy_amount_per_trade: 100000
-    us_order_amount_krw: 20000
-    us_total_test_capital_krw: 100000
-    us_max_symbol_exposure_krw: 50000
-    us_assumed_usd_krw_rate: 1400
-    us_fee_buffer_rate: 0.005
-    us_order_mode: fractional_amount
-    us_fractional_order_enabled: false
-    us_max_buy_amount_per_trade_usd: 15
     max_daily_loss: 5000
     max_daily_loss_percent: -1.5
     max_daily_trade_count: 5
@@ -88,22 +53,3 @@ watchlist:
         min_price: 1000
         max_spread_rate: 0.3
         min_orderbook_depth: 10000000
-
-    us:
-        enabled: false
-        mode: static
-        base_symbols:
-            - SPY
-            - QQQ
-            - SOXX
-            - SMH
-            - XLK
-            - VOO
-        optional_symbols:
-            - NVDA
-            - AAPL
-            - MSFT
-        use_optional_symbols: false
-        max_spread_rate: 0.2
-        exclude_premarket: true
-        exclude_aftermarket: true

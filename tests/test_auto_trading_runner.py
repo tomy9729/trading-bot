@@ -8,8 +8,6 @@ from src.config.bot_config import (
     KrWatchlistConfig,
     RiskConfig,
     StrategyConfig,
-    UsMarketConfig,
-    UsWatchlistConfig,
     WatchlistConfig,
 )
 from src.config.env import Settings
@@ -23,18 +21,9 @@ def _settings() -> Settings:
 def _bot_config() -> BotConfig:
     return BotConfig(
         korea=KoreaMarketConfig(True, "09:00", "15:30", 10, 10, (("09:10", "11:00"),), ("005930",)),
-        us=UsMarketConfig(False, "09:30", "16:00", "America/New_York", 15, 30, ()),
         strategy=StrategyConfig("test", 2.0, 5, 5, 2, 15.0, -2.0, 55.0, 0.3, 60.0, -0.5),
         risk=RiskConfig(
             max_buy_amount_per_trade=100000,
-            us_order_amount_krw=20000,
-            us_total_test_capital_krw=100000,
-            us_max_symbol_exposure_krw=50000,
-            us_assumed_usd_krw_rate=1400.0,
-            us_fee_buffer_rate=0.005,
-            us_max_buy_amount_per_trade_usd=15.0,
-            us_order_mode="fractional_amount",
-            us_fractional_order_enabled=False,
             max_daily_loss=5000,
             max_daily_loss_percent=-1.5,
             max_daily_trade_count=5,
@@ -51,7 +40,6 @@ def _bot_config() -> BotConfig:
         ),
         watchlist=WatchlistConfig(
             kr=KrWatchlistConfig(True, "dynamic", 50, 180, 10, True, True, True, 1000, 0.3, 10000000),
-            us=UsWatchlistConfig(True, "static", ("AAPL",), (), False, 0.2, True, True),
         ),
     )
 
@@ -77,7 +65,6 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
     market_hours = Mock()
     market_hours.korea_tz = ZoneInfo("Asia/Seoul")
     market_hours.is_domestic_open.return_value = True
-    market_hours.is_us_open.return_value = False
 
     domestic_market = Mock()
     domestic_market.get_minute_chart.return_value = _minute_rows()
@@ -101,9 +88,6 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
         domestic_market,
         domestic_account,
         domestic_order,
-        Mock(),
-        Mock(),
-        Mock(),
         watchlist_manager,
     )
     runner._is_domestic_new_buy_blocked = Mock(return_value=False)

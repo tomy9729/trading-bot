@@ -19,24 +19,6 @@ class KoreaMarketConfig:
 
 
 @dataclass(frozen=True)
-class UsWatchItem:
-    symbol: str
-    quote_exchange: str
-    order_exchange: str
-
-
-@dataclass(frozen=True)
-class UsMarketConfig:
-    enabled: bool
-    regular_open: str
-    regular_close: str
-    timezone: str
-    entry_start_after_open_minutes: int
-    entry_stop_before_close_minutes: int
-    watchlist: tuple[UsWatchItem, ...]
-
-
-@dataclass(frozen=True)
 class StrategyConfig:
     name: str
     volume_multiplier: float
@@ -54,14 +36,6 @@ class StrategyConfig:
 @dataclass(frozen=True)
 class RiskConfig:
     max_buy_amount_per_trade: int
-    us_order_amount_krw: int
-    us_total_test_capital_krw: int
-    us_max_symbol_exposure_krw: int
-    us_assumed_usd_krw_rate: float
-    us_fee_buffer_rate: float
-    us_max_buy_amount_per_trade_usd: float
-    us_order_mode: str
-    us_fractional_order_enabled: bool
     max_daily_loss: int
     max_daily_loss_percent: float
     max_daily_trade_count: int
@@ -93,27 +67,13 @@ class KrWatchlistConfig:
 
 
 @dataclass(frozen=True)
-class UsWatchlistConfig:
-    enabled: bool
-    mode: str
-    base_symbols: tuple[str, ...]
-    optional_symbols: tuple[str, ...]
-    use_optional_symbols: bool
-    max_spread_rate: float
-    exclude_premarket: bool
-    exclude_aftermarket: bool
-
-
-@dataclass(frozen=True)
 class WatchlistConfig:
     kr: KrWatchlistConfig
-    us: UsWatchlistConfig
 
 
 @dataclass(frozen=True)
 class BotConfig:
     korea: KoreaMarketConfig
-    us: UsMarketConfig
     strategy: StrategyConfig
     risk: RiskConfig
     watchlist: WatchlistConfig
@@ -131,16 +91,14 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
         raise ValueError("config.yaml must contain a mapping")
     market = _get_dict(data, "market")
     korea = _get_dict(market, "korea")
-    us = _get_dict(market, "us")
     strategy = _get_dict(data, "strategy")
     risk = _get_dict(data, "risk")
     watchlist = data.get("watchlist", {})
     if not isinstance(watchlist, dict):
         raise ValueError("config.watchlist must be a mapping")
     watchlist_kr = watchlist.get("kr", {})
-    watchlist_us = watchlist.get("us", {})
-    if not isinstance(watchlist_kr, dict) or not isinstance(watchlist_us, dict):
-        raise ValueError("config.watchlist.kr/us must be mappings")
+    if not isinstance(watchlist_kr, dict):
+        raise ValueError("config.watchlist.kr must be a mapping")
     return BotConfig(
         korea=KoreaMarketConfig(
             enabled=bool(korea.get("enabled", True)),
@@ -150,15 +108,6 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             force_sell_before_close_minutes=int(korea.get("force_sell_before_close_minutes", 10)),
             entry_windows=_create_entry_windows(korea.get("entry_windows", [["09:10", "11:00"], ["13:30", "14:40"]])),
             watchlist=tuple(str(symbol) for symbol in korea.get("watchlist", [])),
-        ),
-        us=UsMarketConfig(
-            enabled=bool(us.get("enabled", False)),
-            regular_open=str(us.get("regular_open", "09:30")),
-            regular_close=str(us.get("regular_close", "16:00")),
-            timezone=str(us.get("timezone", "America/New_York")),
-            entry_start_after_open_minutes=int(us.get("entry_start_after_open_minutes", 15)),
-            entry_stop_before_close_minutes=int(us.get("entry_stop_before_close_minutes", 30)),
-            watchlist=tuple(_create_us_watch_item(item) for item in us.get("watchlist", [])),
         ),
         strategy=StrategyConfig(
             name=str(strategy.get("name", "vwap-volume-breakout-scalping")),
@@ -175,14 +124,6 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
         ),
         risk=RiskConfig(
             max_buy_amount_per_trade=int(risk.get("max_buy_amount_per_trade", 100000)),
-            us_order_amount_krw=int(risk.get("us_order_amount_krw", 20000)),
-            us_total_test_capital_krw=int(risk.get("us_total_test_capital_krw", 100000)),
-            us_max_symbol_exposure_krw=int(risk.get("us_max_symbol_exposure_krw", 50000)),
-            us_assumed_usd_krw_rate=float(risk.get("us_assumed_usd_krw_rate", 1400.0)),
-            us_fee_buffer_rate=float(risk.get("us_fee_buffer_rate", 0.005)),
-            us_max_buy_amount_per_trade_usd=float(risk.get("us_max_buy_amount_per_trade_usd", 100.0)),
-            us_order_mode=str(risk.get("us_order_mode", "whole_share_amount")),
-            us_fractional_order_enabled=bool(risk.get("us_fractional_order_enabled", False)),
             max_daily_loss=int(risk.get("max_daily_loss", 30000)),
             max_daily_loss_percent=float(risk.get("max_daily_loss_percent", -1.5)),
             max_daily_trade_count=int(risk.get("max_daily_trade_count", 5)),
@@ -211,29 +152,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
                 max_spread_rate=float(watchlist_kr.get("max_spread_rate", 0.3)),
                 min_orderbook_depth=int(watchlist_kr.get("min_orderbook_depth", 10000000)),
             ),
-            us=UsWatchlistConfig(
-                enabled=bool(watchlist_us.get("enabled", True)),
-                mode=str(watchlist_us.get("mode", "static")),
-                base_symbols=tuple(str(symbol) for symbol in watchlist_us.get("base_symbols", [])),
-                optional_symbols=tuple(str(symbol) for symbol in watchlist_us.get("optional_symbols", [])),
-                use_optional_symbols=bool(watchlist_us.get("use_optional_symbols", False)),
-                max_spread_rate=float(watchlist_us.get("max_spread_rate", 0.2)),
-                exclude_premarket=bool(watchlist_us.get("exclude_premarket", True)),
-                exclude_aftermarket=bool(watchlist_us.get("exclude_aftermarket", True)),
-            ),
         ),
-    )
-
-
-def _create_us_watch_item(item: Any) -> UsWatchItem:
-    if isinstance(item, str):
-        return UsWatchItem(symbol=item, quote_exchange="NAS", order_exchange="NASD")
-    if not isinstance(item, dict):
-        raise ValueError("us watchlist items must be string or mapping")
-    return UsWatchItem(
-        symbol=str(item["symbol"]),
-        quote_exchange=str(item.get("quote_exchange", "NAS")),
-        order_exchange=str(item.get("order_exchange", "NASD")),
     )
 
 

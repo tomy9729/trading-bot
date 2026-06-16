@@ -1,7 +1,6 @@
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
-from src.broker.kis_overseas_order import KisOverseasOrder
 from src.logs.trade_logger import get_trade_logger
 
 
@@ -24,11 +23,10 @@ def calculate_order_quantity(current_price: int, available_cash: int, max_order_
 
 
 class DryRunRunner:
-    def __init__(self, market: KisMarket, account: KisAccount, order: KisOrder, overseas_order: KisOverseasOrder | None = None):
+    def __init__(self, market: KisMarket, account: KisAccount, order: KisOrder):
         self.market = market
         self.account = account
         self.order = order
-        self.overseas_order = overseas_order
         self.logger = get_trade_logger()
 
     def test_buy(self, symbol: str, quantity: int = 1) -> dict:
@@ -50,31 +48,3 @@ class DryRunRunner:
         """
         self.logger.info("[TEST SELL] symbol=%s quantity=%s", symbol, quantity)
         return self.order.sell_market(symbol, quantity)
-
-    def test_us_buy(self, symbol: str, quantity: int, price: float, exchange: str = "NASD") -> dict:
-        """Run a US limit-buy test through KisOverseasOrder.
-
-        @param symbol: Overseas stock symbol.
-        @param quantity: Order quantity.
-        @param price: Limit price.
-        @param exchange: Overseas trading exchange code.
-        @returns: Order response.
-        """
-        if self.overseas_order is None:
-            raise RuntimeError("overseas order dependency is not configured")
-        self.logger.info("[TEST US BUY] symbol=%s exchange=%s price=%s quantity=%s", symbol, exchange, price, quantity)
-        return self.overseas_order.buy_limit(symbol, quantity, price, exchange)
-
-    def test_us_sell(self, symbol: str, quantity: int, price: float, exchange: str = "NASD") -> dict:
-        """Run a US limit-sell test through KisOverseasOrder.
-
-        @param symbol: Overseas stock symbol.
-        @param quantity: Order quantity.
-        @param price: Limit price.
-        @param exchange: Overseas trading exchange code.
-        @returns: Order response.
-        """
-        if self.overseas_order is None:
-            raise RuntimeError("overseas order dependency is not configured")
-        self.logger.info("[TEST US SELL] symbol=%s exchange=%s price=%s quantity=%s", symbol, exchange, price, quantity)
-        return self.overseas_order.sell_limit(symbol, quantity, price, exchange)

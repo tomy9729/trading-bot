@@ -112,9 +112,9 @@ def _get_text_event_type(message: str) -> str:
         return "MISSED_BUY_CANDIDATE"
     if message.startswith("[WATCHLIST EXCLUDE]"):
         return "RISK_FILTER_REJECTED"
-    if message.startswith("[ORDER REQUEST]") or message.startswith("[US ORDER REQUEST]"):
+    if message.startswith("[ORDER REQUEST]"):
         return "BUY_ORDER_SUBMITTED" if "side=BUY" in message else "SELL_ORDER_SUBMITTED"
-    if message.startswith("[ORDER FAILED]") or message.startswith("[US ORDER FAILED]"):
+    if message.startswith("[ORDER FAILED]"):
         return "BUY_ORDER_REJECTED" if "side=BUY" in message else "SELL_ORDER_REJECTED"
     return "LOG"
 
