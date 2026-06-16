@@ -13,6 +13,7 @@ from src.runner.market_hours import MarketHours
 class WatchlistState:
     symbols: list[str] = field(default_factory=list)
     us_items: list[UsWatchItem] = field(default_factory=list)
+    names: dict[str, str] = field(default_factory=dict)
     exclude_reasons: dict[str, str] = field(default_factory=dict)
     last_refreshed_at: datetime | None = None
 
@@ -83,10 +84,20 @@ class WatchlistManager:
         """
         return self._states[market].exclude_reasons.get(symbol)
 
+    def get_symbol_name(self, market: str, symbol: str) -> str | None:
+        """Return a cached display name for a symbol.
+
+        @param market: KR or US.
+        @param symbol: Symbol.
+        @returns: Symbol name or None when unavailable.
+        """
+        return self._states[market].names.get(symbol)
+
     def _refresh_kr(self) -> None:
         config = self.bot_config.watchlist.kr
         previous_symbols = set(self._states["KR"].symbols)
         exclude_reasons: dict[str, str] = {}
+        names: dict[str, str] = {}
         if not config.enabled:
             self._states["KR"] = WatchlistState(exclude_reasons={"*": "watchlist_disabled"}, last_refreshed_at=datetime.now())
             return
@@ -100,20 +111,24 @@ class WatchlistManager:
         symbols = []
         for candidate in candidates:
             symbol = candidate["symbol"]
+            name = candidate.get("name")
+            if name:
+                names[symbol] = str(name)
             reason = self._get_kr_exclude_reason(symbol)
             if reason is not None:
                 exclude_reasons[symbol] = reason
-                self.logger.info("[WATCHLIST EXCLUDE] market=KR symbol=%s rank=%s reason=%s", symbol, candidate.get("rank"), reason)
+                self.logger.info("[WATCHLIST EXCLUDE] market=KR symbol=%s name=%r rank=%s reason=%s", symbol, name, candidate.get("rank"), reason)
                 continue
             symbols.append(symbol)
 
-        self._states["KR"] = WatchlistState(symbols=symbols, exclude_reasons=exclude_reasons, last_refreshed_at=datetime.now())
+        self._states["KR"] = WatchlistState(symbols=symbols, names=names, exclude_reasons=exclude_reasons, last_refreshed_at=datetime.now())
         self._log_refresh("KR", previous_symbols, symbols)
 
     def _refresh_us(self) -> None:
         config = self.bot_config.watchlist.us
         previous_symbols = set(self._states["US"].symbols)
         exclude_reasons: dict[str, str] = {}
+        names: dict[str, str] = {}
         if not config.enabled:
             self._states["US"] = WatchlistState(exclude_reasons={"*": "watchlist_disabled"}, last_refreshed_at=datetime.now())
             return
@@ -126,16 +141,18 @@ class WatchlistManager:
         items = []
         for symbol in dict.fromkeys(symbols):
             item = item_by_symbol.get(symbol) or UsWatchItem(symbol=symbol, quote_exchange="NAS", order_exchange="NASD")
+            names[item.symbol] = item.symbol
             reason = self._get_us_exclude_reason(item)
             if reason is not None:
                 exclude_reasons[symbol] = reason
-                self.logger.info("[WATCHLIST EXCLUDE] market=US symbol=%s reason=%s", symbol, reason)
+                self.logger.info("[WATCHLIST EXCLUDE] market=US symbol=%s name=%r reason=%s", symbol, names[item.symbol], reason)
                 continue
             items.append(item)
 
         self._states["US"] = WatchlistState(
             symbols=[item.symbol for item in items],
             us_items=items,
+            names=names,
             exclude_reasons=exclude_reasons,
             last_refreshed_at=datetime.now(),
         )
@@ -193,7 +210,7 @@ def _create_kr_candidate(row: dict[str, Any], rank: int) -> dict[str, Any]:
         row.get("mksc_shrn_iscd")
         or row.get("stck_shrn_iscd")
         or row.get("pdno")
-        or row.get("hts_kor_isnm")
         or ""
     )
-    return {"symbol": str(symbol), "rank": rank, "raw": row}
+    name = row.get("hts_kor_isnm") or row.get("prdt_name") or row.get("stck_prdt_name") or row.get("name")
+    return {"symbol": str(symbol), "name": str(name) if name not in (None, "") else None, "rank": rank, "raw": row}

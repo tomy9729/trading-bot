@@ -75,7 +75,7 @@ def test_us_watchlist_uses_optional_symbols_only_when_enabled():
 
 def test_kr_watchlist_excludes_wide_spread_symbol():
     domestic_market = Mock()
-    domestic_market.get_trading_value_rank.return_value = [{"mksc_shrn_iscd": "005930"}]
+    domestic_market.get_trading_value_rank.return_value = [{"mksc_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자"}]
     domestic_market.get_current_price.return_value = 70000
     domestic_market.get_orderbook.return_value = {"spread_rate": 0.5, "depth_value": 100000000}
 
@@ -84,3 +84,4 @@ def test_kr_watchlist_excludes_wide_spread_symbol():
 
     assert manager.get_symbols("KR") == []
     assert manager.get_exclude_reason("KR", "005930") == "wide_spread"
+    assert manager.get_symbol_name("KR", "005930") == "삼성전자"

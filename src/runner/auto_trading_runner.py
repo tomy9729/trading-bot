@@ -112,10 +112,10 @@ class AutoTradingRunner:
                     continue
                 if not self.watchlist_manager.is_watchable("KR", symbol):
                     reason = self.watchlist_manager.get_exclude_reason("KR", symbol) or "not_in_watchlist"
-                    self.logger.info("[BUY SKIP] market=KR symbol=%s skip_reason=%s", symbol, reason)
+                    self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r skip_reason=%s", symbol, self._get_symbol_name("KR", symbol), reason)
                     continue
                 if not self._is_reentry_allowed(symbol):
-                    self.logger.info("[BUY SKIP] market=domestic symbol=%s reason=REENTRY_COOLDOWN", symbol)
+                    self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=REENTRY_COOLDOWN", symbol, self._get_symbol_name("KR", symbol))
                     continue
                 self._handle_domestic_buy(symbol, snapshot, self._is_domestic_new_buy_blocked())
             except Exception:
@@ -134,10 +134,10 @@ class AutoTradingRunner:
                     continue
                 if not self.watchlist_manager.is_watchable("US", item.symbol):
                     reason = self.watchlist_manager.get_exclude_reason("US", item.symbol) or "not_in_watchlist"
-                    self.logger.info("[BUY SKIP] market=US symbol=%s skip_reason=%s", item.symbol, reason)
+                    self.logger.info("[BUY SKIP] market=US symbol=%s name=%r skip_reason=%s", item.symbol, self._get_symbol_name("US", item.symbol), reason)
                     continue
                 if not self._is_reentry_allowed(item.symbol):
-                    self.logger.info("[BUY SKIP] market=us symbol=%s reason=REENTRY_COOLDOWN", item.symbol)
+                    self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=REENTRY_COOLDOWN", item.symbol, self._get_symbol_name("US", item.symbol))
                     continue
                 self._handle_us_buy(item, snapshot, self._is_us_new_buy_blocked())
             except Exception:
@@ -145,15 +145,16 @@ class AutoTradingRunner:
                 self.logger.exception("[AUTO US CYCLE FAILED] symbol=%s", item.symbol)
 
     def _handle_domestic_buy(self, symbol: str, snapshot, is_new_buy_blocked: bool = False) -> None:
+        name = self._get_symbol_name("KR", symbol)
         if self.state.stopped_new_order:
-            self.logger.info("[BUY SKIP] market=domestic symbol=%s reason=NEW_ORDER_STOPPED", symbol)
+            self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_ORDER_STOPPED", symbol, name)
             return
         signal = self.entry_signal.evaluate("KR", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
-        self.logger.info("[BUY CHECK] market=domestic symbol=%s signal=%s", symbol, signal)
+        self.logger.info("[BUY CHECK] market=domestic symbol=%s name=%r signal=%s", symbol, name, signal)
         if not signal.allowed:
             return
         if is_new_buy_blocked:
-            self.logger.info("[BUY SKIP] market=domestic symbol=%s reason=NEW_BUY_TIME_BLOCKED", symbol)
+            self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", symbol, name)
             return
         available_cash = self.domestic_account.get_available_cash(symbol)
         quantity = calculate_order_quantity(
@@ -163,25 +164,26 @@ class AutoTradingRunner:
             self.settings.force_quantity,
         )
         if quantity < 1:
-            self.logger.info("[BUY SKIP] market=domestic symbol=%s reason=NO_ORDER_QUANTITY available_cash=%s", symbol, available_cash)
+            self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NO_ORDER_QUANTITY available_cash=%s", symbol, name, available_cash)
             return
         self._place_domestic_buy(symbol, quantity, snapshot.current_price)
 
     def _handle_us_buy(self, item: UsWatchItem, snapshot, is_new_buy_blocked: bool = False) -> None:
+        name = self._get_symbol_name("US", item.symbol)
         if self.state.stopped_new_order:
-            self.logger.info("[BUY SKIP] market=us symbol=%s reason=NEW_ORDER_STOPPED", item.symbol)
+            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NEW_ORDER_STOPPED", item.symbol, name)
             return
         signal = self.entry_signal.evaluate("US", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
-        self.logger.info("[BUY CHECK] market=us symbol=%s signal=%s", item.symbol, signal)
+        self.logger.info("[BUY CHECK] market=us symbol=%s name=%r signal=%s", item.symbol, name, signal)
         if not signal.allowed:
             return
         if is_new_buy_blocked:
-            self.logger.info("[BUY SKIP] market=us symbol=%s reason=NEW_BUY_TIME_BLOCKED", item.symbol)
+            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", item.symbol, name)
             return
         available_cash = self.overseas_account.get_available_cash(item.symbol, snapshot.current_price, item.order_exchange)
         quantity = self._calculate_us_order_quantity(item.symbol, snapshot.current_price, available_cash)
         if quantity <= 0:
-            self.logger.info("[BUY SKIP] market=us symbol=%s reason=NO_ORDER_QUANTITY available_cash=%s", item.symbol, available_cash)
+            self.logger.info("[BUY SKIP] market=us symbol=%s name=%r reason=NO_ORDER_QUANTITY available_cash=%s", item.symbol, name, available_cash)
             return
         self._place_us_buy(item, quantity, snapshot.current_price)
 
@@ -193,7 +195,7 @@ class AutoTradingRunner:
         )
         if self._is_domestic_force_sell_time():
             signal = signal.__class__("SELL", True, "FORCE_SELL_BEFORE_CLOSE", signal.details)
-        self.logger.info("[SELL CHECK] market=domestic symbol=%s signal=%s", position.symbol, signal)
+        self.logger.info("[SELL CHECK] market=domestic symbol=%s name=%r signal=%s", position.symbol, self._get_symbol_name("KR", position.symbol), signal)
         if signal.allowed:
             self._place_domestic_exit(position.symbol, position.quantity, signal.reason)
 
@@ -203,7 +205,7 @@ class AutoTradingRunner:
             snapshot,
             partial_taken=position.symbol in self.state.partial_profit_taken_symbols,
         )
-        self.logger.info("[SELL CHECK] market=us symbol=%s signal=%s", position.symbol, signal)
+        self.logger.info("[SELL CHECK] market=us symbol=%s name=%r signal=%s", position.symbol, self._get_symbol_name("US", position.symbol), signal)
         if signal.allowed:
             self._place_us_exit(item, position.quantity, snapshot.current_price, signal.reason)
 
@@ -213,7 +215,7 @@ class AutoTradingRunner:
             response = self.domestic_order.buy_market(symbol, quantity)
             self.state.daily_entry_count_by_symbol[symbol] = self.state.daily_entry_count_by_symbol.get(symbol, 0) + 1
             self.state.positions[symbol] = Position(symbol=symbol, quantity=quantity, average_price=price, entry_time=datetime.now())
-            self.logger.info("[BUY DONE] market=KR symbol=%s entry_price=%s quantity=%s response=%s", symbol, price, quantity, response)
+            self.logger.info("[BUY DONE] market=KR symbol=%s name=%r entry_price=%s quantity=%s response=%s", symbol, self._get_symbol_name("KR", symbol), price, quantity, response)
         finally:
             self.state.pending_order_symbols.discard(symbol)
 
@@ -226,7 +228,7 @@ class AutoTradingRunner:
         try:
             response = self.domestic_order.sell_market(symbol, sell_quantity)
             self._update_position_after_exit(symbol, sell_quantity, reason)
-            self.logger.info("[SELL DONE] market=KR symbol=%s quantity=%s reason=%s response=%s", symbol, sell_quantity, reason, response)
+            self.logger.info("[SELL DONE] market=KR symbol=%s name=%r quantity=%s reason=%s response=%s", symbol, self._get_symbol_name("KR", symbol), sell_quantity, reason, response)
         finally:
             self.state.pending_order_symbols.discard(symbol)
 
@@ -249,7 +251,7 @@ class AutoTradingRunner:
             )
             self.state.us_total_invested_krw += max(order_krw, 0)
             self.state.us_invested_krw_by_symbol[item.symbol] = self.state.us_invested_krw_by_symbol.get(item.symbol, 0) + max(order_krw, 0)
-            self.logger.info("[BUY DONE] market=US symbol=%s entry_price=%s quantity=%s response=%s", item.symbol, price, quantity, response)
+            self.logger.info("[BUY DONE] market=US symbol=%s name=%r entry_price=%s quantity=%s response=%s", item.symbol, self._get_symbol_name("US", item.symbol), price, quantity, response)
         finally:
             self.state.pending_order_symbols.discard(item.symbol)
 
@@ -262,7 +264,7 @@ class AutoTradingRunner:
         try:
             response = self.overseas_order.sell_limit(item.symbol, sell_quantity, float(price), item.order_exchange)
             self._update_position_after_exit(item.symbol, sell_quantity, reason)
-            self.logger.info("[SELL DONE] market=US symbol=%s exit_price=%s quantity=%s reason=%s response=%s", item.symbol, price, sell_quantity, reason, response)
+            self.logger.info("[SELL DONE] market=US symbol=%s name=%r exit_price=%s quantity=%s reason=%s response=%s", item.symbol, self._get_symbol_name("US", item.symbol), price, sell_quantity, reason, response)
         finally:
             self.state.pending_order_symbols.discard(item.symbol)
 
@@ -381,6 +383,9 @@ class AutoTradingRunner:
         if self.bot_config.risk.us_order_mode == "fractional_amount":
             return (usd_amount / price).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
         raise RuntimeError(f"Unsupported US order mode: {self.bot_config.risk.us_order_mode}")
+
+    def _get_symbol_name(self, market: str, symbol: str) -> str | None:
+        return self.watchlist_manager.get_symbol_name(market, symbol)
 
     def _exit_quantity(self, symbol: str, quantity: int, reason: str) -> int:
         if reason == "FIRST_TAKE_PROFIT" and symbol not in self.state.partial_profit_taken_symbols:

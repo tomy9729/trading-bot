@@ -8,3 +8,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Daily trading reports
+/reports/*.md
+!/reports/README.md
+!/reports/.gitkeep

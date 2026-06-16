@@ -24,6 +24,11 @@ def main() -> int:
 
     @returns: Process exit code.
     """
+    if len(sys.argv) > 1 and sys.argv[1] == "report":
+        from src.report.daily_report import run_report_command
+
+        return run_report_command(sys.argv[2:])
+
     parser = argparse.ArgumentParser(description="KIS VWAP volume-breakout trading bot")
     parser.add_argument("--mode", default="dry-run", choices=["dry-run", "live", "monitor", "test-order", "test-buy", "test-sell"])
     parser.add_argument("--market", default="domestic", choices=["domestic", "us", "auto"])
