@@ -48,6 +48,9 @@ class Settings:
     max_position_count: int
     daily_max_loss_rate: float
     daily_max_loss_amount: int
+    kis_min_request_interval_seconds: float = 0.5
+    kis_rate_limit_retry_seconds: float = 1.0
+    kis_rate_limit_max_attempts: int = 3
 
     @property
     def base_url(self) -> str:
@@ -86,4 +89,7 @@ def load_settings() -> Settings:
         max_position_count=_get_int("MAX_POSITION_COUNT", 1),
         daily_max_loss_rate=_get_float("DAILY_MAX_LOSS_RATE", -2.0),
         daily_max_loss_amount=_get_int("DAILY_MAX_LOSS_AMOUNT", 20000),
+        kis_min_request_interval_seconds=_get_float("KIS_MIN_REQUEST_INTERVAL_SECONDS", 0.5),
+        kis_rate_limit_retry_seconds=_get_float("KIS_RATE_LIMIT_RETRY_SECONDS", 1.0),
+        kis_rate_limit_max_attempts=_get_int("KIS_RATE_LIMIT_MAX_ATTEMPTS", 3),
     )

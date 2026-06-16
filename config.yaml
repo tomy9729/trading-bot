@@ -6,13 +6,13 @@ market:
         stop_new_buy_before_close_minutes: 10
         force_sell_before_close_minutes: 10
         entry_windows:
-            - ["09:10", "11:00"]
-            - ["13:30", "14:40"]
+            - ["09:10", "11:30"]
+            - ["13:00", "15:00"]
         watchlist:
             - "005930"
 
     us:
-        enabled: true
+        enabled: false
         regular_open: "09:30"
         regular_close: "16:00"
         timezone: "America/New_York"

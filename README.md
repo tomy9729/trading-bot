@@ -26,6 +26,9 @@ MAX_ORDER_AMOUNT=100000
 MAX_POSITION_COUNT=1
 DAILY_MAX_LOSS_RATE=-2.0
 DAILY_MAX_LOSS_AMOUNT=20000
+KIS_MIN_REQUEST_INTERVAL_SECONDS=0.5
+KIS_RATE_LIMIT_RETRY_SECONDS=1.0
+KIS_RATE_LIMIT_MAX_ATTEMPTS=3
 ```
 
 전략, 리스크, 관심종목은 [config.yaml](/C:/Users/tomy9/OneDrive/Desktop/toy/tra/trading-bot/config.yaml)에서 관리합니다. 기본값은 국내장 활성화, 미국장 비활성화입니다.
@@ -70,8 +73,8 @@ python main.py --mode monitor --interval-seconds 60
 
 국내 신규 진입 허용 시간 기본값:
 
-- `09:10~11:00`
-- `13:30~14:40`
+- `09:10~11:30`
+- `13:00~15:00`
 
 미국 신규 진입 허용 시간 기본값:
 
@@ -141,6 +144,8 @@ python main.py --mode monitor --interval-seconds 60
 VI 직후 10분 제외, 급등 뉴스 직후 과열 제외, 실제 관리/투자경고/거래정지 상세 판정은 현재 KIS 순위 API의 제외코드와 watchlist 제외 사유 구조를 통해 확장 가능하게 분리되어 있습니다. 별도 실시간 장운영정보/뉴스 API를 연결하면 WatchlistManager의 제외 조건으로 추가할 수 있습니다.
 
 KIS 접근토큰은 `.kis_token_cache.json`에 로컬 캐시됩니다. 이 파일은 민감한 토큰을 포함하므로 Git에 포함하지 않습니다.
+
+KIS API 호출은 `KIS_MIN_REQUEST_INTERVAL_SECONDS` 간격을 두고 전송합니다. KIS rate limit 응답 `EGW00201`, `EGW00215`가 오면 `KIS_RATE_LIMIT_RETRY_SECONDS` 기준으로 점진 대기 후 `KIS_RATE_LIMIT_MAX_ATTEMPTS` 횟수까지 재시도합니다.
 
 ## 테스트
 

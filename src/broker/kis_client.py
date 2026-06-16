@@ -9,13 +9,14 @@ from src.logs.trade_logger import get_trade_logger
 
 
 class KisClient:
-    RATE_LIMIT_ERROR_CODE = "EGW00201"
+    RATE_LIMIT_ERROR_CODES = {"EGW00201", "EGW00215"}
 
     def __init__(self, settings: Settings, session: Optional[requests.Session] = None):
         self.settings = settings
         self.session = session or requests.Session()
         self.auth = KisAuth(settings, self.session)
         self.logger = get_trade_logger()
+        self._last_request_at = 0.0
 
     def get(self, path: str, tr_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Call a KIS GET endpoint.
@@ -53,6 +54,7 @@ class KisClient:
             "appkey": self.settings.kis_app_key,
             "appsecret": self.settings.kis_app_secret,
         }
+        self._throttle_request()
         response = self.session.post(url, json=payload, headers=headers, timeout=10)
         data = _read_json(response)
         hashkey = data.get("HASH") or data.get("hash")
@@ -83,7 +85,9 @@ class KisClient:
             headers.update(extra_headers)
 
         last_response = None
-        for attempt in range(1, 4):
+        max_attempts = max(1, self.settings.kis_rate_limit_max_attempts)
+        for attempt in range(1, max_attempts + 1):
+            self._throttle_request()
             response = self.session.request(
                 method,
                 url,
@@ -96,9 +100,9 @@ class KisClient:
             last_response = (response.status_code, data)
             if response.status_code < 400 and str(data.get("rt_cd", "0")) == "0":
                 return data
-            if data.get("msg_cd") != self.RATE_LIMIT_ERROR_CODE or attempt >= 3:
+            if data.get("msg_cd") not in self.RATE_LIMIT_ERROR_CODES or attempt >= max_attempts:
                 break
-            wait_seconds = attempt
+            wait_seconds = self.settings.kis_rate_limit_retry_seconds * attempt
             self.logger.warning(
                 "[KIS RATE LIMIT] tr_id=%s attempt=%s wait_seconds=%s response=%s",
                 tr_id,
@@ -110,6 +114,16 @@ class KisClient:
 
         status_code, data = last_response or (0, {})
         raise RuntimeError(f"KIS API request failed: tr_id={tr_id}, status={status_code}, response={data}")
+
+    def _throttle_request(self) -> None:
+        interval_seconds = max(0.0, self.settings.kis_min_request_interval_seconds)
+        if interval_seconds <= 0:
+            return
+        elapsed_seconds = time.monotonic() - self._last_request_at
+        wait_seconds = interval_seconds - elapsed_seconds
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        self._last_request_at = time.monotonic()
 
 
 def _read_json(response: requests.Response) -> Dict[str, Any]:
