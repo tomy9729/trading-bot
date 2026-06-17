@@ -77,43 +77,110 @@ class EntrySignal:
         @returns: Buy or hold signal.
         """
         details = _entry_details(snapshot)
+        matched_conditions = []
+        failed_conditions = []
+        first_failed_reason = None
         market_result = self.market_filter.check_entry(market, snapshot)
         details.update(market_result.details)
-        if not market_result.allowed:
-            return Signal("HOLD", False, market_result.reason, details)
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "MARKET_DIRECTION",
+            market_result.allowed,
+            market_result.reason,
+            first_failed_reason,
+        )
 
         symbol_result = self.symbol_filter.check_entry(snapshot)
         details.update(symbol_result.details)
-        if not symbol_result.allowed:
-            return Signal("HOLD", False, symbol_result.reason, details)
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "SYMBOL_FILTER",
+            symbol_result.allowed,
+            symbol_result.reason,
+            first_failed_reason,
+        )
 
         vwap_entry_price_ratio = self.bot_config.strategy.vwap_entry_price_ratio
         details["vwap_entry_price_ratio"] = vwap_entry_price_ratio
         details["vwap_entry_threshold"] = get_vwap_entry_threshold(snapshot.vwap, vwap_entry_price_ratio)
-        if not is_price_above_vwap_entry_threshold(snapshot.current_price, snapshot.vwap, vwap_entry_price_ratio):
-            return Signal("HOLD", False, "PRICE_NOT_ABOVE_VWAP", details)
-        if snapshot.vwap_hold_candle_count < self.bot_config.strategy.vwap_hold_candles:
-            return Signal("HOLD", False, "VWAP_HOLD_NOT_CONFIRMED", details)
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "PRICE_ABOVE_VWAP",
+            is_price_above_vwap_entry_threshold(snapshot.current_price, snapshot.vwap, vwap_entry_price_ratio),
+            "PRICE_NOT_ABOVE_VWAP",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "VWAP_HOLD",
+            snapshot.vwap_hold_candle_count >= self.bot_config.strategy.vwap_hold_candles,
+            "VWAP_HOLD_NOT_CONFIRMED",
+            first_failed_reason,
+        )
 
         volume_multiplier = calculate_volume_multiplier(
             snapshot.one_minute_volume,
             snapshot.previous_five_minute_average_volume,
         )
         details["volume_multiplier"] = volume_multiplier
-        if volume_multiplier < self.bot_config.strategy.volume_multiplier:
-            return Signal("HOLD", False, "VOLUME_SPIKE_NOT_ENOUGH", details)
-        if snapshot.current_price <= snapshot.recent_high:
-            return Signal("HOLD", False, "BREAKOUT_FAILED", details)
-        if snapshot.execution_strength < self.bot_config.strategy.min_execution_strength:
-            return Signal("HOLD", False, "EXECUTION_STRENGTH_WEAK", details)
-        if snapshot.daily_rise_rate > self.bot_config.strategy.max_daily_rise_percent:
-            return Signal("HOLD", False, "DAILY_RISE_RATE_TOO_HIGH", details)
-        if position_state.has_symbol(snapshot.symbol):
-            return Signal("HOLD", False, "ALREADY_HELD_SYMBOL", details)
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "VOLUME_SPIKE",
+            volume_multiplier >= self.bot_config.strategy.volume_multiplier,
+            "VOLUME_SPIKE_NOT_ENOUGH",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "PRICE_BREAKOUT",
+            snapshot.current_price > snapshot.recent_high,
+            "BREAKOUT_FAILED",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "EXECUTION_STRENGTH",
+            snapshot.execution_strength >= self.bot_config.strategy.min_execution_strength,
+            "EXECUTION_STRENGTH_WEAK",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "DAILY_RISE_RATE",
+            snapshot.daily_rise_rate <= self.bot_config.strategy.max_daily_rise_percent,
+            "DAILY_RISE_RATE_TOO_HIGH",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "NOT_ALREADY_HELD",
+            not position_state.has_symbol(snapshot.symbol),
+            "ALREADY_HELD_SYMBOL",
+            first_failed_reason,
+        )
 
         allowed, reason = risk_manager.can_enter(snapshot.symbol, risk_state)
-        if not allowed:
-            return Signal("HOLD", False, reason, details)
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "RISK_CHECK",
+            allowed,
+            reason,
+            first_failed_reason,
+        )
+        details["matched_conditions"] = tuple(matched_conditions)
+        details["failed_conditions"] = tuple(failed_conditions)
+        if first_failed_reason is not None:
+            return Signal("HOLD", False, first_failed_reason, details)
         return Signal("BUY", True, "VWAP_HOLD_VOLUME_BREAKOUT_MARKET_CONFIRMED", details)
 
 
@@ -132,25 +199,84 @@ class ExitSignal:
         """
         current_time = now or datetime.now()
         profit_rate = ((snapshot.current_price - position.average_price) / position.average_price) * 100
+        profit_amount = (snapshot.current_price - position.average_price) * position.quantity
         hold_minutes = (current_time - position.entry_time).total_seconds() / 60
         details = _entry_details(snapshot)
-        details.update({"profit_rate": profit_rate, "hold_minutes": hold_minutes})
-        if partial_taken and profit_rate <= self.bot_config.risk.break_even_stop_percent:
-            return Signal("SELL", True, "BREAK_EVEN_STOP_AFTER_PARTIAL", details)
-        if profit_rate <= self.bot_config.risk.stop_loss_percent:
-            return Signal("SELL", True, "STOP_LOSS", details)
-        if snapshot.current_price < snapshot.vwap:
-            return Signal("SELL", True, "VWAP_BREAKDOWN", details)
-        if hold_minutes >= self.bot_config.risk.stale_position_minutes and profit_rate < self.bot_config.risk.stale_position_min_profit_percent:
-            return Signal("SELL", True, "TIME_STOP_NO_MOMENTUM", details)
-        if snapshot.volume_declining:
-            return Signal("SELL", True, "VOLUME_DROPPED_AFTER_BREAKOUT", details)
-        if snapshot.market_direction_rate <= self.bot_config.strategy.market_down_block_threshold_percent:
-            return Signal("SELL", True, "MARKET_TURNED_DOWN", details)
-        if not partial_taken and profit_rate >= self.bot_config.risk.take_profit_percent:
-            return Signal("PARTIAL_SELL", True, "FIRST_TAKE_PROFIT", details)
-        if partial_taken and profit_rate >= self.bot_config.risk.second_take_profit_percent:
-            return Signal("SELL", True, "SECOND_TAKE_PROFIT", details)
+        details.update(
+            {
+                "entry_price": position.average_price,
+                "average_price": position.average_price,
+                "position_quantity": position.quantity,
+                "profit_rate": profit_rate,
+                "profit_amount": profit_amount,
+                "hold_minutes": hold_minutes,
+                "stop_loss_price": position.average_price * (1 + (self.bot_config.risk.stop_loss_percent / 100)),
+                "take_profit_price": position.average_price * (1 + (self.bot_config.risk.take_profit_percent / 100)),
+            }
+        )
+        matched_conditions = []
+        failed_conditions = []
+        first_exit_reason = None
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "BREAK_EVEN_STOP_AFTER_PARTIAL",
+            partial_taken and profit_rate <= self.bot_config.risk.break_even_stop_percent,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "STOP_LOSS",
+            profit_rate <= self.bot_config.risk.stop_loss_percent,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "VWAP_BREAKDOWN",
+            snapshot.current_price < snapshot.vwap,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "TIME_STOP_NO_MOMENTUM",
+            hold_minutes >= self.bot_config.risk.stale_position_minutes and profit_rate < self.bot_config.risk.stale_position_min_profit_percent,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "VOLUME_DROPPED_AFTER_BREAKOUT",
+            snapshot.volume_declining,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "MARKET_TURNED_DOWN",
+            snapshot.market_direction_rate <= self.bot_config.strategy.market_down_block_threshold_percent,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "FIRST_TAKE_PROFIT",
+            not partial_taken and profit_rate >= self.bot_config.risk.take_profit_percent,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "SECOND_TAKE_PROFIT",
+            partial_taken and profit_rate >= self.bot_config.risk.second_take_profit_percent,
+            first_exit_reason,
+        )
+        details["matched_conditions"] = tuple(matched_conditions)
+        details["failed_conditions"] = tuple(failed_conditions)
+        if first_exit_reason is not None:
+            return Signal("PARTIAL_SELL" if first_exit_reason == "FIRST_TAKE_PROFIT" else "SELL", True, first_exit_reason, details)
         return Signal("HOLD", False, "EXIT_CONDITION_NOT_MET", details)
 
 
@@ -159,11 +285,52 @@ def _entry_details(snapshot: MarketSnapshot) -> dict[str, Any]:
         "symbol": snapshot.symbol,
         "current_price": snapshot.current_price,
         "vwap": snapshot.vwap,
+        "vwap_gap": _rate_gap(snapshot.current_price, snapshot.vwap),
+        "one_minute_volume": snapshot.one_minute_volume,
+        "previous_five_minute_average_volume": snapshot.previous_five_minute_average_volume,
         "recent_high": snapshot.recent_high,
+        "daily_rise_rate": snapshot.daily_rise_rate,
+        "trade_value": snapshot.trade_value,
         "spread_rate": snapshot.spread_rate,
+        "previous_candle_drop_rate": snapshot.previous_candle_drop_rate,
         "execution_strength": snapshot.execution_strength,
         "vwap_hold_candle_count": snapshot.vwap_hold_candle_count,
         "upper_wick_rate": snapshot.upper_wick_rate,
         "market_direction_rate": snapshot.market_direction_rate,
         "volume_declining": snapshot.volume_declining,
     }
+
+
+def _append_condition_result(
+    matched_conditions: list[str],
+    failed_conditions: list[str],
+    name: str,
+    allowed: bool,
+    failed_reason: str,
+    first_failed_reason: str | None,
+) -> str | None:
+    if allowed:
+        matched_conditions.append(name)
+        return first_failed_reason
+    failed_conditions.append(name)
+    return first_failed_reason or failed_reason
+
+
+def _append_exit_condition_result(
+    matched_conditions: list[str],
+    failed_conditions: list[str],
+    reason: str,
+    matched: bool,
+    first_exit_reason: str | None,
+) -> str | None:
+    if matched:
+        matched_conditions.append(reason)
+        return first_exit_reason or reason
+    failed_conditions.append(reason)
+    return first_exit_reason
+
+
+def _rate_gap(current_price: int | float, base_price: int | float) -> float | None:
+    if base_price <= 0:
+        return None
+    return ((current_price - base_price) / base_price) * 100

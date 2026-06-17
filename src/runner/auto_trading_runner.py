@@ -10,7 +10,7 @@ from src.broker.kis_order import KisOrder
 from src.config.bot_config import BotConfig
 from src.config.env import Settings
 from src.domain.position import Position, PositionState
-from src.logs.trade_logger import get_trade_logger
+from src.logs.trade_logger import get_trade_logger, write_trade_event
 from src.risk.risk_manager import RiskManager, RiskState
 from src.runner.dry_run_runner import calculate_order_quantity
 from src.runner.market_hours import MarketHours
@@ -61,6 +61,8 @@ class AutoTradingRunner:
         self.exit_signal = ExitSignal(bot_config)
         self.state = AutoTradingState()
         self.logger = get_trade_logger()
+        self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.cycle_id = 0
 
     def run_forever(self, interval_seconds: int) -> None:
         """Run the automatic trading loop until the process is stopped.
@@ -74,6 +76,7 @@ class AutoTradingRunner:
 
     def run_once(self) -> None:
         """Run one automatic domestic trading cycle."""
+        self.cycle_id += 1
         self._reset_daily_state_if_needed()
         if self.bot_config.korea.enabled:
             if self.market_hours.is_domestic_open():
@@ -95,9 +98,11 @@ class AutoTradingRunner:
                 if not self.watchlist_manager.is_watchable("KR", symbol):
                     reason = self.watchlist_manager.get_exclude_reason("KR", symbol) or "not_in_watchlist"
                     self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r skip_reason=%s", symbol, self._get_symbol_name("KR", symbol), reason)
+                    self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), reason, snapshot=snapshot)
                     continue
                 if not self._is_reentry_allowed(symbol):
                     self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=REENTRY_COOLDOWN", symbol, self._get_symbol_name("KR", symbol))
+                    self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), "REENTRY_COOLDOWN", snapshot=snapshot)
                     continue
                 self._handle_domestic_buy(symbol, snapshot, self._is_domestic_new_buy_blocked())
             except Exception:
@@ -107,10 +112,12 @@ class AutoTradingRunner:
         name = self._get_symbol_name("KR", symbol)
         signal = self.entry_signal.evaluate("KR", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
         self.logger.info("[BUY CHECK] market=domestic symbol=%s name=%r signal=%s", symbol, name, signal)
+        self._write_strategy_decision("BUY", "KR", symbol, name, signal, snapshot)
         if not signal.allowed:
             return
         if is_new_buy_blocked:
             self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", symbol, name)
+            self._write_skip_event("KR", symbol, name, "NEW_BUY_TIME_BLOCKED", snapshot=snapshot)
             return
         available_cash = self.domestic_account.get_available_cash(symbol)
         quantity = calculate_order_quantity(
@@ -121,6 +128,7 @@ class AutoTradingRunner:
         )
         if quantity < 1:
             self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NO_ORDER_QUANTITY available_cash=%s", symbol, name, available_cash)
+            self._write_skip_event("KR", symbol, name, "NO_ORDER_QUANTITY", {"available_cash": available_cash}, snapshot)
             return
         self._place_domestic_buy(symbol, quantity, snapshot.current_price)
 
@@ -133,6 +141,7 @@ class AutoTradingRunner:
         if self._is_domestic_force_sell_time():
             signal = signal.__class__("SELL", True, "FORCE_SELL_BEFORE_CLOSE", signal.details)
         self.logger.info("[SELL CHECK] market=domestic symbol=%s name=%r signal=%s", position.symbol, self._get_symbol_name("KR", position.symbol), signal)
+        self._write_strategy_decision("SELL", "KR", position.symbol, self._get_symbol_name("KR", position.symbol), signal, snapshot)
         if signal.allowed:
             self._place_domestic_exit(position.symbol, position.quantity, signal.reason)
 
@@ -143,6 +152,21 @@ class AutoTradingRunner:
             self.state.daily_entry_count_by_symbol[symbol] = self.state.daily_entry_count_by_symbol.get(symbol, 0) + 1
             self.state.positions[symbol] = Position(symbol=symbol, quantity=quantity, average_price=price, entry_time=datetime.now())
             self.logger.info("[BUY DONE] market=KR symbol=%s name=%r entry_price=%s quantity=%s response=%s", symbol, self._get_symbol_name("KR", symbol), price, quantity, response)
+            write_trade_event(
+                "order_filled",
+                {
+                    **self._event_context("KR", symbol, self._get_symbol_name("KR", symbol)),
+                    "side": "BUY",
+                    "order_type": "MARKET",
+                    "decision_price": price,
+                    "entry_price": price,
+                    "requested_quantity": quantity,
+                    "filled_quantity": None,
+                    "filled_price": None,
+                    "order_result": response,
+                    "dry_run": self.settings.dry_run,
+                },
+            )
         finally:
             self.state.pending_order_symbols.discard(symbol)
 
@@ -150,12 +174,27 @@ class AutoTradingRunner:
         sell_quantity = self._exit_quantity(symbol, quantity, reason)
         if sell_quantity < 1:
             self.logger.info("[SELL SKIP] market=KR symbol=%s reason=NO_SELL_QUANTITY", symbol)
+            self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), "NO_SELL_QUANTITY")
             return
         self.state.pending_order_symbols.add(symbol)
         try:
             response = self.domestic_order.sell_market(symbol, sell_quantity)
             self._update_position_after_exit(symbol, sell_quantity, reason)
             self.logger.info("[SELL DONE] market=KR symbol=%s name=%r quantity=%s reason=%s response=%s", symbol, self._get_symbol_name("KR", symbol), sell_quantity, reason, response)
+            write_trade_event(
+                "order_filled",
+                {
+                    **self._event_context("KR", symbol, self._get_symbol_name("KR", symbol)),
+                    "side": "SELL",
+                    "order_type": "MARKET",
+                    "exit_reason": reason,
+                    "requested_quantity": sell_quantity,
+                    "filled_quantity": None,
+                    "filled_price": None,
+                    "order_result": response,
+                    "dry_run": self.settings.dry_run,
+                },
+            )
         finally:
             self.state.pending_order_symbols.discard(symbol)
 
@@ -191,6 +230,127 @@ class AutoTradingRunner:
             pending_order_symbols=set(self.state.pending_order_symbols),
             held_symbols=set(self.state.positions.keys()),
         )
+
+    def _write_strategy_decision(self, side: str, market: str, symbol: str, name: str | None, signal, snapshot) -> None:
+        write_trade_event(
+            "strategy_decision",
+            {
+                **self._event_context(market, symbol, name),
+                "side": side,
+                "strategy_name": self.bot_config.strategy.name,
+                "strategy_version": None,
+                "applied_config": self._strategy_config_payload(),
+                "market_snapshot": self._market_snapshot_payload(snapshot),
+                "decision": {
+                    "action": signal.signal,
+                    "allowed": signal.allowed,
+                    "reason": signal.reason,
+                    "matched_conditions": list(signal.details.get("matched_conditions", ())),
+                    "failed_conditions": list(signal.details.get("failed_conditions", ())),
+                    "skip_reason": None if signal.allowed else signal.reason,
+                    "entry_reason": signal.reason if side == "BUY" and signal.allowed else None,
+                    "exit_reason": signal.reason if side == "SELL" and signal.allowed else None,
+                },
+                "strategy_values": dict(signal.details),
+                "risk_snapshot": self._risk_snapshot_payload(),
+                "dry_run": self.settings.dry_run,
+            },
+        )
+
+    def _write_skip_event(self, market: str, symbol: str, name: str | None, reason: str, extra: dict | None = None, snapshot=None) -> None:
+        payload = {
+            **self._event_context(market, symbol, name),
+            "reason": reason,
+            "risk_snapshot": self._risk_snapshot_payload(),
+            "dry_run": self.settings.dry_run,
+        }
+        if snapshot is not None:
+            payload["market_snapshot"] = self._market_snapshot_payload(snapshot)
+        if extra:
+            payload.update(extra)
+        write_trade_event("order_skipped", payload)
+
+    def _event_context(self, market: str, symbol: str | None = None, name: str | None = None) -> dict:
+        return {
+            "run_id": self.run_id,
+            "cycle_id": self.cycle_id,
+            "market": market,
+            "session": "regular" if self.market_hours.is_domestic_open() else "closed",
+            "bot_status": "running",
+            "symbol": symbol,
+            "symbol_name": name,
+        }
+
+    def _strategy_config_payload(self) -> dict:
+        strategy = self.bot_config.strategy
+        risk = self.bot_config.risk
+        return {
+            "volume_multiplier": strategy.volume_multiplier,
+            "breakout_window_minutes": strategy.breakout_window_minutes,
+            "volume_lookback_minutes": strategy.volume_lookback_minutes,
+            "vwap_hold_candles": strategy.vwap_hold_candles,
+            "vwap_entry_price_ratio": strategy.vwap_entry_price_ratio,
+            "max_daily_rise_percent": strategy.max_daily_rise_percent,
+            "min_execution_strength": strategy.min_execution_strength,
+            "max_spread_percent": strategy.max_spread_percent,
+            "max_upper_wick_percent": strategy.max_upper_wick_percent,
+            "market_down_block_threshold_percent": strategy.market_down_block_threshold_percent,
+            "take_profit_percent": risk.take_profit_percent,
+            "second_take_profit_percent": risk.second_take_profit_percent,
+            "stop_loss_percent": risk.stop_loss_percent,
+            "stale_position_minutes": risk.stale_position_minutes,
+            "stale_position_min_profit_percent": risk.stale_position_min_profit_percent,
+        }
+
+    def _market_snapshot_payload(self, snapshot) -> dict:
+        return {
+            "symbol": snapshot.symbol,
+            "current_price": snapshot.current_price,
+            "vwap": snapshot.vwap,
+            "vwap_gap": _rate_gap(snapshot.current_price, snapshot.vwap),
+            "volume": snapshot.one_minute_volume,
+            "one_minute_volume": snapshot.one_minute_volume,
+            "avg_volume": snapshot.previous_five_minute_average_volume,
+            "previous_five_minute_average_volume": snapshot.previous_five_minute_average_volume,
+            "volume_ratio": _safe_ratio(snapshot.one_minute_volume, snapshot.previous_five_minute_average_volume),
+            "recent_high": snapshot.recent_high,
+            "price_breakout_threshold": snapshot.recent_high,
+            "daily_rise_rate": snapshot.daily_rise_rate,
+            "trade_value": snapshot.trade_value,
+            "spread_rate": snapshot.spread_rate,
+            "previous_candle_drop_rate": snapshot.previous_candle_drop_rate,
+            "execution_strength": snapshot.execution_strength,
+            "vwap_hold_candle_count": snapshot.vwap_hold_candle_count,
+            "upper_wick_rate": snapshot.upper_wick_rate,
+            "market_direction_rate": snapshot.market_direction_rate,
+            "volume_declining": snapshot.volume_declining,
+            "candles": [
+                {
+                    "timestamp": candle.timestamp,
+                    "open_price": candle.open_price,
+                    "high_price": candle.high_price,
+                    "low_price": candle.low_price,
+                    "close_price": candle.close_price,
+                    "volume": candle.volume,
+                }
+                for candle in snapshot.candles
+            ],
+        }
+
+    def _risk_snapshot_payload(self) -> dict:
+        return {
+            "daily_realized_pnl": None,
+            "daily_loss_limit": self.settings.daily_max_loss_amount,
+            "daily_loss_rate_limit": self.settings.daily_max_loss_rate,
+            "daily_loss_amount": self.state.daily_loss_amount,
+            "consecutive_losses": self.state.consecutive_loss_count,
+            "max_positions": self.settings.max_position_count,
+            "current_positions_count": len(self.state.positions),
+            "held_symbols": sorted(self.state.positions),
+            "pending_order_symbols": sorted(self.state.pending_order_symbols),
+            "daily_entry_count_by_symbol": dict(self.state.daily_entry_count_by_symbol),
+            "kill_switch_status": "off",
+        }
 
     def _is_domestic_new_buy_blocked(self) -> bool:
         now = datetime.now(self.market_hours.korea_tz)
@@ -253,3 +413,15 @@ def _to_int(value) -> int:
     if value in (None, ""):
         return 0
     return int(float(str(value).replace(",", "")))
+
+
+def _rate_gap(current_price: int | float, base_price: int | float) -> float | None:
+    if base_price <= 0:
+        return None
+    return ((current_price - base_price) / base_price) * 100
+
+
+def _safe_ratio(value: int | float, base_value: int | float) -> float | None:
+    if base_value <= 0:
+        return None
+    return value / base_value

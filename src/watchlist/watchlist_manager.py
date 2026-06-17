@@ -4,7 +4,7 @@ from typing import Any
 
 from src.broker.kis_market import KisMarket
 from src.config.bot_config import BotConfig
-from src.logs.trade_logger import get_trade_logger
+from src.logs.trade_logger import get_trade_logger, write_trade_event
 from src.runner.market_hours import MarketHours
 
 
@@ -102,6 +102,16 @@ class WatchlistManager:
             if reason is not None:
                 exclude_reasons[symbol] = reason
                 self.logger.info("[WATCHLIST EXCLUDE] market=KR symbol=%s name=%r rank=%s reason=%s", symbol, name, candidate.get("rank"), reason)
+                write_trade_event(
+                    "watchlist_excluded",
+                    {
+                        "market": "KR",
+                        "symbol": symbol,
+                        "symbol_name": name,
+                        "rank": candidate.get("rank"),
+                        "reason": reason,
+                    },
+                )
                 continue
             symbols.append(symbol)
 
@@ -139,6 +149,16 @@ class WatchlistManager:
             len(symbols),
             added_symbols,
             removed_symbols,
+        )
+        write_trade_event(
+            "watchlist_refreshed",
+            {
+                "market": market,
+                "count": len(symbols),
+                "symbols": symbols,
+                "added": added_symbols,
+                "removed": removed_symbols,
+            },
         )
 
 
