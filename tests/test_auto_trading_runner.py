@@ -95,3 +95,40 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
     runner.run_once()
 
     domestic_order.buy_market.assert_called_once_with("005930", 1)
+
+
+def test_auto_runner_continues_buy_attempts_after_order_failure():
+    market_hours = Mock()
+    market_hours.korea_tz = ZoneInfo("Asia/Seoul")
+    market_hours.is_domestic_open.return_value = True
+
+    domestic_market = Mock()
+    domestic_market.get_minute_chart.return_value = _minute_rows()
+    domestic_market.get_current_price.return_value = 1010
+    domestic_market.get_orderbook.return_value = {"spread_rate": 0.1}
+
+    domestic_account = Mock()
+    domestic_account.get_balance.return_value = []
+    domestic_account.get_available_cash.return_value = 100000
+
+    domestic_order = Mock()
+    domestic_order.buy_market.side_effect = [RuntimeError("order failed"), {"dry_run": True}]
+    watchlist_manager = Mock()
+    watchlist_manager.get_symbols.return_value = ["005930", "000660"]
+    watchlist_manager.is_watchable.return_value = True
+
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        market_hours,
+        domestic_market,
+        domestic_account,
+        domestic_order,
+        watchlist_manager,
+    )
+    runner._is_domestic_new_buy_blocked = Mock(return_value=False)
+
+    runner.run_once()
+
+    assert domestic_order.buy_market.call_args_list[0].args == ("005930", 1)
+    assert domestic_order.buy_market.call_args_list[1].args == ("000660", 1)

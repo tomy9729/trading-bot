@@ -28,7 +28,6 @@ class AutoTradingState:
     last_exit_at_by_symbol: Dict[str, datetime] = field(default_factory=dict)
     daily_loss_amount: int = 0
     consecutive_loss_count: int = 0
-    stopped_new_order: bool = False
 
 
 class AutoTradingRunner:
@@ -102,14 +101,10 @@ class AutoTradingRunner:
                     continue
                 self._handle_domestic_buy(symbol, snapshot, self._is_domestic_new_buy_blocked())
             except Exception:
-                self.state.stopped_new_order = True
                 self.logger.exception("[AUTO DOMESTIC CYCLE FAILED] symbol=%s", symbol)
 
     def _handle_domestic_buy(self, symbol: str, snapshot, is_new_buy_blocked: bool = False) -> None:
         name = self._get_symbol_name("KR", symbol)
-        if self.state.stopped_new_order:
-            self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_ORDER_STOPPED", symbol, name)
-            return
         signal = self.entry_signal.evaluate("KR", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
         self.logger.info("[BUY CHECK] market=domestic symbol=%s name=%r signal=%s", symbol, name, signal)
         if not signal.allowed:
