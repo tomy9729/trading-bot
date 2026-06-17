@@ -6,6 +6,7 @@ from src.domain.position import Position, PositionState
 from src.domain.signal import Signal
 from src.risk.risk_manager import RiskManager, RiskState
 from src.strategy.indicators import calculate_volume_multiplier
+from src.strategy.vwap_entry_rule import get_vwap_entry_threshold, is_price_above_vwap_entry_threshold
 
 
 def should_buy(
@@ -23,7 +24,10 @@ def should_buy(
     @returns: Buy or hold signal with reason and details.
     """
     details = _buy_details(data)
-    if data.current_price <= data.vwap:
+    vwap_entry_price_ratio = strategy_config.VWAP_ENTRY_PRICE_RATIO
+    details["vwap_entry_price_ratio"] = vwap_entry_price_ratio
+    details["vwap_entry_threshold"] = get_vwap_entry_threshold(data.vwap, vwap_entry_price_ratio)
+    if not is_price_above_vwap_entry_threshold(data.current_price, data.vwap, vwap_entry_price_ratio):
         return Signal("HOLD", False, "PRICE_NOT_ABOVE_VWAP", details)
 
     volume_multiplier = calculate_volume_multiplier(

@@ -31,6 +31,7 @@ class StrategyConfig:
     max_spread_percent: float
     max_upper_wick_percent: float
     market_down_block_threshold_percent: float
+    vwap_entry_price_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             max_spread_percent=float(strategy.get("max_spread_percent", 0.3)),
             max_upper_wick_percent=_get_float_env("MAX_UPPER_WICK_PERCENT", float(strategy.get("max_upper_wick_percent", 45.0))),
             market_down_block_threshold_percent=float(strategy.get("market_down_block_threshold_percent", -0.5)),
+            vwap_entry_price_ratio=_get_positive_float_env("VWAP_ENTRY_PRICE_RATIO", 1.0),
         ),
         risk=RiskConfig(
             max_buy_amount_per_trade=int(risk.get("max_buy_amount_per_trade", 100000)),
@@ -168,6 +170,13 @@ def _get_float_env(name: str, default: float) -> float:
     if value in (None, ""):
         return default
     return float(value)
+
+
+def _get_positive_float_env(name: str, default: float) -> float:
+    value = _get_float_env(name, default)
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
 
 
 def _create_entry_windows(items: Any) -> tuple[tuple[str, str], ...]:

@@ -42,6 +42,25 @@ def test_no_buy_when_price_is_below_vwap():
     assert signal.reason == "PRICE_NOT_ABOVE_VWAP"
 
 
+def test_buy_when_vwap_entry_price_ratio_relaxes_threshold(monkeypatch):
+    monkeypatch.setattr("src.strategy.vwap_volume_breakout.strategy_config.VWAP_ENTRY_PRICE_RATIO", 0.998)
+
+    signal = _buy_signal(_snapshot(current_price=71900, vwap=72000, recent_high=71800))
+
+    assert signal.signal == "BUY"
+    assert signal.details["vwap_entry_threshold"] == 71856
+
+
+def test_no_buy_when_vwap_entry_price_ratio_strengthens_threshold(monkeypatch):
+    monkeypatch.setattr("src.strategy.vwap_volume_breakout.strategy_config.VWAP_ENTRY_PRICE_RATIO", 1.002)
+
+    signal = _buy_signal(_snapshot(current_price=72050, vwap=72000, recent_high=72000))
+
+    assert signal.signal == "HOLD"
+    assert signal.reason == "PRICE_NOT_ABOVE_VWAP"
+    assert signal.details["vwap_entry_threshold"] == 72144
+
+
 def test_no_buy_when_volume_multiplier_is_too_low():
     signal = _buy_signal(_snapshot(one_minute_volume=1999))
     assert signal.reason == "VOLUME_SPIKE_NOT_ENOUGH"

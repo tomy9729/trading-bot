@@ -48,6 +48,7 @@ MAX_POSITION_COUNT=1
 DAILY_MAX_LOSS_RATE=-2.0
 DAILY_MAX_LOSS_AMOUNT=20000
 MAX_UPPER_WICK_PERCENT=45.0
+VWAP_ENTRY_PRICE_RATIO=1.0
 KIS_MIN_REQUEST_INTERVAL_SECONDS=0.5
 KIS_RATE_LIMIT_RETRY_SECONDS=1.0
 KIS_RATE_LIMIT_MAX_ATTEMPTS=3
@@ -83,7 +84,7 @@ python main.py --mode test-sell --symbol 005930 --quantity 1
 아래 조건을 모두 만족할 때 신규 매수를 검토합니다.
 
 - WatchlistManager가 현재 감시 가능한 종목으로 허용
-- 현재가가 VWAP 위에 있음
+- 현재가가 VWAP에 `VWAP_ENTRY_PRICE_RATIO`를 곱한 기준보다 위에 있음
 - VWAP 위에서 `vwap_hold_candles` 이상 유지
 - 최근 1분 거래량이 직전 `volume_lookback_minutes`분 평균 거래량의 `volume_multiplier`배 이상
 - 현재가가 직전 박스권 상단, 기본 직전 5분 고점, 돌파
@@ -103,6 +104,16 @@ python main.py --mode test-sell --symbol 005930 --quantity 1
 
 - `09:10~11:30`
 - `13:00~15:00`
+
+### VWAP 진입 기준 조정
+
+`PRICE_NOT_ABOVE_VWAP` 조건은 `.env`의 `VWAP_ENTRY_PRICE_RATIO`로 완화하거나 강화할 수 있습니다.
+
+- 기본값 `1.0`: 현재가가 VWAP보다 높아야 매수 조건 통과
+- 완화 예시 `0.998`: 현재가가 VWAP의 99.8%보다 높으면 통과, 약 0.2% 아래까지 허용
+- 강화 예시 `1.002`: 현재가가 VWAP의 100.2%보다 높아야 통과
+
+값을 낮추면 매수 후보가 늘 수 있고, 값을 높이면 VWAP 상단 확인을 더 엄격하게 봅니다.
 
 ## 매도 기준
 

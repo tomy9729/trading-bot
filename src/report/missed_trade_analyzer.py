@@ -4,6 +4,7 @@ from typing import Any
 from src.config.bot_config import BotConfig
 from src.report.report_parser import ReportEvent
 from src.report.simulated_trade_calculator import SimulatedTradeResult, calculate_simulated_trade
+from src.strategy.vwap_entry_rule import get_vwap_entry_threshold
 
 
 ENTRY_CONDITIONS = (
@@ -111,7 +112,9 @@ def _evaluate_conditions(details: dict[str, Any], reason: str, bot_config: BotCo
     _append_condition(satisfied, failed, "스프레드", _to_float(details.get("spread_rate"), 999.0) <= bot_config.strategy.max_spread_percent)
     _append_condition(satisfied, failed, "윗꼬리", _to_float(details.get("upper_wick_rate"), 999.0) <= bot_config.strategy.max_upper_wick_percent)
     _append_condition(satisfied, failed, "거래량 감소 아님", details.get("volume_declining") is not True)
-    _append_condition(satisfied, failed, "VWAP 상단", _to_float(details.get("current_price"), 0.0) > _to_float(details.get("vwap"), 999999999.0))
+    vwap = _to_float(details.get("vwap"), 999999999.0)
+    threshold = get_vwap_entry_threshold(vwap, bot_config.strategy.vwap_entry_price_ratio)
+    _append_condition(satisfied, failed, "VWAP 상단", _to_float(details.get("current_price"), 0.0) > threshold)
     _append_condition(satisfied, failed, "VWAP 유지", _to_float(details.get("vwap_hold_candle_count"), 0.0) >= bot_config.strategy.vwap_hold_candles)
     if "volume_multiplier" in details:
         _append_condition(satisfied, failed, "거래량 급증", _to_float(details.get("volume_multiplier"), 0.0) >= bot_config.strategy.volume_multiplier)

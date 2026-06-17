@@ -8,6 +8,7 @@ from src.domain.position import Position, PositionState
 from src.domain.signal import Signal
 from src.risk.risk_manager import RiskManager, RiskState
 from src.strategy.indicators import calculate_volume_multiplier
+from src.strategy.vwap_entry_rule import get_vwap_entry_threshold, is_price_above_vwap_entry_threshold
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,10 @@ class EntrySignal:
         if not symbol_result.allowed:
             return Signal("HOLD", False, symbol_result.reason, details)
 
-        if snapshot.current_price <= snapshot.vwap:
+        vwap_entry_price_ratio = self.bot_config.strategy.vwap_entry_price_ratio
+        details["vwap_entry_price_ratio"] = vwap_entry_price_ratio
+        details["vwap_entry_threshold"] = get_vwap_entry_threshold(snapshot.vwap, vwap_entry_price_ratio)
+        if not is_price_above_vwap_entry_threshold(snapshot.current_price, snapshot.vwap, vwap_entry_price_ratio):
             return Signal("HOLD", False, "PRICE_NOT_ABOVE_VWAP", details)
         if snapshot.vwap_hold_candle_count < self.bot_config.strategy.vwap_hold_candles:
             return Signal("HOLD", False, "VWAP_HOLD_NOT_CONFIRMED", details)
