@@ -1,4 +1,9 @@
+from dataclasses import replace
+
+import pytest
+
 from src.config.bot_config import load_bot_config
+from src.config.env import Settings, validate_settings
 
 
 def test_max_upper_wick_percent_can_be_overridden_by_env(monkeypatch):
@@ -15,3 +20,20 @@ def test_vwap_entry_price_ratio_can_be_overridden_by_env(monkeypatch):
     bot_config = load_bot_config()
 
     assert bot_config.strategy.vwap_entry_price_ratio == 0.998
+
+
+def test_bot_config_rejects_invalid_stop_loss():
+    bot_config = load_bot_config()
+    invalid_config = replace(bot_config, risk=replace(bot_config.risk, stop_loss_percent=0.5))
+
+    with pytest.raises(ValueError, match="stop_loss_percent"):
+        from src.config.bot_config import validate_bot_config
+
+        validate_bot_config(invalid_config)
+
+
+def test_settings_rejects_empty_account_number():
+    settings = Settings("key", "secret", "", "01", False, True, None, 100000, 1, -2.0, 20000)
+
+    with pytest.raises(ValueError, match="KIS_ACCOUNT_NO"):
+        validate_settings(settings)

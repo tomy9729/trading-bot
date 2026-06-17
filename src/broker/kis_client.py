@@ -10,6 +10,7 @@ from src.logs.trade_logger import get_trade_logger
 
 class KisClient:
     RATE_LIMIT_ERROR_CODES = {"EGW00201", "EGW00215"}
+    AUTH_ERROR_CODES = {"EGW00123", "EGW00121", "EGW00110", "EGW00111", "EGW00112"}
 
     def __init__(self, settings: Settings, session: Optional[requests.Session] = None):
         self.settings = settings
@@ -71,22 +72,22 @@ class KisClient:
         payload: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        token = self.auth.get_access_token()
         url = f"{self.settings.base_url}{path}"
-        headers = {
-            "content-type": "application/json; charset=utf-8",
-            "authorization": f"Bearer {token}",
-            "appkey": self.settings.kis_app_key,
-            "appsecret": self.settings.kis_app_secret,
-            "tr_id": tr_id,
-            "custtype": "P",
-        }
-        if extra_headers:
-            headers.update(extra_headers)
 
         last_response = None
         max_attempts = max(1, self.settings.kis_rate_limit_max_attempts)
         for attempt in range(1, max_attempts + 1):
+            token = self.auth.get_access_token()
+            headers = {
+                "content-type": "application/json; charset=utf-8",
+                "authorization": f"Bearer {token}",
+                "appkey": self.settings.kis_app_key,
+                "appsecret": self.settings.kis_app_secret,
+                "tr_id": tr_id,
+                "custtype": "P",
+            }
+            if extra_headers:
+                headers.update(extra_headers)
             self._throttle_request()
             response = self.session.request(
                 method,
@@ -100,6 +101,11 @@ class KisClient:
             last_response = (response.status_code, data)
             if response.status_code < 400 and str(data.get("rt_cd", "0")) == "0":
                 return data
+            if self._is_auth_error(response.status_code, data):
+                self.auth.invalidate_access_token()
+                if attempt < max_attempts:
+                    self.logger.warning("[KIS AUTH RETRY] tr_id=%s attempt=%s response=%s", tr_id, attempt, data)
+                    continue
             if data.get("msg_cd") not in self.RATE_LIMIT_ERROR_CODES or attempt >= max_attempts:
                 break
             wait_seconds = self.settings.kis_rate_limit_retry_seconds * attempt
@@ -114,6 +120,11 @@ class KisClient:
 
         status_code, data = last_response or (0, {})
         raise RuntimeError(f"KIS API request failed: tr_id={tr_id}, status={status_code}, response={data}")
+
+    def _is_auth_error(self, status_code: int, data: Dict[str, Any]) -> bool:
+        if status_code in {401, 403}:
+            return True
+        return str(data.get("msg_cd") or "") in self.AUTH_ERROR_CODES
 
     def _throttle_request(self) -> None:
         interval_seconds = max(0.0, self.settings.kis_min_request_interval_seconds)

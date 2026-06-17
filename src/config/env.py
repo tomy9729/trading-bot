@@ -77,7 +77,7 @@ def load_settings() -> Settings:
         joined_names = ", ".join(missing_names)
         raise ValueError(f"Missing required environment variables: {joined_names}")
 
-    return Settings(
+    settings = Settings(
         kis_app_key=os.environ["KIS_APP_KEY"],
         kis_app_secret=os.environ["KIS_APP_SECRET"],
         kis_account_no=os.environ["KIS_ACCOUNT_NO"],
@@ -93,3 +93,29 @@ def load_settings() -> Settings:
         kis_rate_limit_retry_seconds=_get_float("KIS_RATE_LIMIT_RETRY_SECONDS", 1.0),
         kis_rate_limit_max_attempts=_get_int("KIS_RATE_LIMIT_MAX_ATTEMPTS", 3),
     )
+    validate_settings(settings)
+    return settings
+
+
+def validate_settings(settings: Settings) -> None:
+    """Validate runtime settings before trading starts.
+
+    @param settings: Loaded environment settings.
+    @raises ValueError: If a setting can make trading unsafe.
+    """
+    if not settings.kis_account_no.strip():
+        raise ValueError("KIS_ACCOUNT_NO must not be empty")
+    if not settings.kis_account_product_code.strip():
+        raise ValueError("KIS_ACCOUNT_PRODUCT_CODE must not be empty")
+    if settings.force_quantity is not None and settings.force_quantity <= 0:
+        raise ValueError("FORCE_QUANTITY must be greater than 0 when set")
+    if settings.max_order_amount <= 0:
+        raise ValueError("MAX_ORDER_AMOUNT must be greater than 0")
+    if settings.max_position_count <= 0:
+        raise ValueError("MAX_POSITION_COUNT must be greater than 0")
+    if settings.daily_max_loss_amount <= 0:
+        raise ValueError("DAILY_MAX_LOSS_AMOUNT must be greater than 0")
+    if settings.daily_max_loss_rate >= 0:
+        raise ValueError("DAILY_MAX_LOSS_RATE must be negative")
+    if settings.kis_rate_limit_max_attempts <= 0:
+        raise ValueError("KIS_RATE_LIMIT_MAX_ATTEMPTS must be greater than 0")

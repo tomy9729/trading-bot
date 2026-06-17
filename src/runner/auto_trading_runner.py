@@ -2,13 +2,14 @@ import time
 from dataclasses import dataclass, field
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Any, Callable, Dict
 
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
 from src.config.bot_config import BotConfig
 from src.config.env import Settings
+from src.db.repository import TradingRepository
 from src.domain.position import Position, PositionState
 from src.logs.trade_logger import get_trade_logger, write_trade_event
 from src.risk.risk_manager import RiskManager, RiskState
@@ -24,10 +25,17 @@ class AutoTradingState:
     positions: Dict[str, Position] = field(default_factory=dict)
     daily_entry_count_by_symbol: Dict[str, int] = field(default_factory=dict)
     pending_order_symbols: set[str] = field(default_factory=set)
+    pending_buy_symbols: set[str] = field(default_factory=set)
+    pending_sell_symbols: set[str] = field(default_factory=set)
+    order_locked_symbols: set[str] = field(default_factory=set)
     partial_profit_taken_symbols: set[str] = field(default_factory=set)
     last_exit_at_by_symbol: Dict[str, datetime] = field(default_factory=dict)
     daily_loss_amount: int = 0
     consecutive_loss_count: int = 0
+    daily_realized_pnl: int = 0
+    safe_mode: bool = False
+    kill_switch_reasons: set[str] = field(default_factory=set)
+    startup_recovered: bool = False
 
 
 class AutoTradingRunner:
@@ -40,6 +48,7 @@ class AutoTradingRunner:
         domestic_account: KisAccount,
         domestic_order: KisOrder,
         watchlist_manager: WatchlistManager,
+        trade_repository: TradingRepository | None = None,
     ):
         self.settings = replace(
             settings,
@@ -53,6 +62,7 @@ class AutoTradingRunner:
         self.domestic_account = domestic_account
         self.domestic_order = domestic_order
         self.watchlist_manager = watchlist_manager
+        self.trade_repository = trade_repository
         self.snapshot_builder = MarketSnapshotBuilder(bot_config.strategy)
         self.risk_manager = RiskManager(self.settings, bot_config.risk.max_daily_trade_count)
         market_filter = MarketFilter(bot_config)
@@ -78,6 +88,8 @@ class AutoTradingRunner:
         """Run one automatic domestic trading cycle."""
         self.cycle_id += 1
         self._reset_daily_state_if_needed()
+        if not self.state.startup_recovered:
+            self._recover_startup_state()
         if self.bot_config.korea.enabled:
             if self.market_hours.is_domestic_open():
                 self._run_domestic_cycle()
@@ -85,8 +97,13 @@ class AutoTradingRunner:
                 self.logger.info("[AUTO WAIT] market=domestic")
 
     def _run_domestic_cycle(self) -> None:
-        self._sync_domestic_positions()
-        self.watchlist_manager.refresh("KR")
+        if not self._sync_domestic_positions():
+            return
+        self._sync_domestic_executions()
+        try:
+            self._call_with_retries(lambda: self.watchlist_manager.refresh("KR"), "watchlist_refresh", "KR")
+        except Exception:
+            self._activate_safe_mode("WATCHLIST_REFRESH_FAILED")
         symbols = self._get_domestic_cycle_symbols()
         for symbol in symbols:
             try:
@@ -110,6 +127,22 @@ class AutoTradingRunner:
 
     def _handle_domestic_buy(self, symbol: str, snapshot, is_new_buy_blocked: bool = False) -> None:
         name = self._get_symbol_name("KR", symbol)
+        if self.state.safe_mode:
+            self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r reason=SAFE_MODE_ACTIVE", symbol, name)
+            self._write_skip_event("KR", symbol, name, "SAFE_MODE_ACTIVE", snapshot=snapshot)
+            return
+        if self._is_kill_switch_active():
+            self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r reason=KILL_SWITCH_ACTIVE", symbol, name)
+            self._write_skip_event("KR", symbol, name, "KILL_SWITCH_ACTIVE", snapshot=snapshot)
+            return
+        if symbol in self.state.pending_buy_symbols:
+            self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r reason=PENDING_BUY_ORDER_EXISTS", symbol, name)
+            self._write_skip_event("KR", symbol, name, "PENDING_BUY_ORDER_EXISTS", snapshot=snapshot)
+            return
+        if symbol in self.state.order_locked_symbols:
+            self.logger.info("[BUY SKIP] market=KR symbol=%s name=%r reason=ORDER_LOCKED", symbol, name)
+            self._write_skip_event("KR", symbol, name, "ORDER_LOCKED", snapshot=snapshot)
+            return
         signal = self.entry_signal.evaluate("KR", snapshot, self._position_state(), self._risk_state(), self.risk_manager)
         self.logger.info("[BUY CHECK] market=domestic symbol=%s name=%r signal=%s", symbol, name, signal)
         self._write_strategy_decision("BUY", "KR", symbol, name, signal, snapshot)
@@ -119,7 +152,7 @@ class AutoTradingRunner:
             self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", symbol, name)
             self._write_skip_event("KR", symbol, name, "NEW_BUY_TIME_BLOCKED", snapshot=snapshot)
             return
-        available_cash = self.domestic_account.get_available_cash(symbol)
+        available_cash = self._call_with_retries(lambda: self.domestic_account.get_available_cash(symbol), "available_cash", symbol)
         quantity = calculate_order_quantity(
             snapshot.current_price,
             available_cash,
@@ -133,6 +166,18 @@ class AutoTradingRunner:
         self._place_domestic_buy(symbol, quantity, snapshot.current_price)
 
     def _handle_domestic_sell(self, position: Position, snapshot) -> None:
+        if position.quantity <= 0:
+            self.logger.info("[SELL SKIP] market=KR symbol=%s reason=NO_HELD_QUANTITY", position.symbol)
+            self._write_skip_event("KR", position.symbol, self._get_symbol_name("KR", position.symbol), "NO_HELD_QUANTITY", snapshot=snapshot)
+            return
+        if position.symbol in self.state.pending_sell_symbols:
+            self.logger.info("[SELL SKIP] market=KR symbol=%s reason=PENDING_SELL_ORDER_EXISTS", position.symbol)
+            self._write_skip_event("KR", position.symbol, self._get_symbol_name("KR", position.symbol), "PENDING_SELL_ORDER_EXISTS", snapshot=snapshot)
+            return
+        if position.symbol in self.state.order_locked_symbols:
+            self.logger.info("[SELL SKIP] market=KR symbol=%s reason=ORDER_LOCKED", position.symbol)
+            self._write_skip_event("KR", position.symbol, self._get_symbol_name("KR", position.symbol), "ORDER_LOCKED", snapshot=snapshot)
+            return
         signal = self.exit_signal.evaluate(
             position,
             snapshot,
@@ -146,6 +191,11 @@ class AutoTradingRunner:
             self._place_domestic_exit(position.symbol, position.quantity, signal.reason)
 
     def _place_domestic_buy(self, symbol: str, quantity: int, price: int) -> None:
+        if symbol in self.state.order_locked_symbols:
+            self.logger.info("[BUY SKIP] market=KR symbol=%s reason=ORDER_LOCKED", symbol)
+            self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), "ORDER_LOCKED")
+            return
+        self.state.order_locked_symbols.add(symbol)
         self.state.pending_order_symbols.add(symbol)
         try:
             response = self.domestic_order.buy_market(symbol, quantity)
@@ -167,8 +217,13 @@ class AutoTradingRunner:
                     "dry_run": self.settings.dry_run,
                 },
             )
+        except Exception as exc:
+            self.logger.exception("[BUY ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, quantity)
+            if not self._reconcile_uncertain_order(symbol, "BUY", exc):
+                self._activate_safe_mode("BUY_ORDER_STATUS_UNCERTAIN")
         finally:
             self.state.pending_order_symbols.discard(symbol)
+            self.state.order_locked_symbols.discard(symbol)
 
     def _place_domestic_exit(self, symbol: str, quantity: int, reason: str) -> None:
         sell_quantity = self._exit_quantity(symbol, quantity, reason)
@@ -176,6 +231,11 @@ class AutoTradingRunner:
             self.logger.info("[SELL SKIP] market=KR symbol=%s reason=NO_SELL_QUANTITY", symbol)
             self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), "NO_SELL_QUANTITY")
             return
+        if symbol in self.state.order_locked_symbols:
+            self.logger.info("[SELL SKIP] market=KR symbol=%s reason=ORDER_LOCKED", symbol)
+            self._write_skip_event("KR", symbol, self._get_symbol_name("KR", symbol), "ORDER_LOCKED")
+            return
+        self.state.order_locked_symbols.add(symbol)
         self.state.pending_order_symbols.add(symbol)
         try:
             response = self.domestic_order.sell_market(symbol, sell_quantity)
@@ -195,27 +255,35 @@ class AutoTradingRunner:
                     "dry_run": self.settings.dry_run,
                 },
             )
+        except Exception as exc:
+            self.logger.exception("[SELL ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, sell_quantity)
+            if not self._reconcile_uncertain_order(symbol, "SELL", exc):
+                self._activate_safe_mode("SELL_ORDER_STATUS_UNCERTAIN")
         finally:
             self.state.pending_order_symbols.discard(symbol)
+            self.state.order_locked_symbols.discard(symbol)
 
     def _build_domestic_snapshot(self, symbol: str):
-        rows = self.domestic_market.get_minute_chart(symbol)
+        rows = self._call_with_retries(lambda: self.domestic_market.get_minute_chart(symbol), "minute_chart", symbol)
         candles = parse_domestic_candles(rows)
-        price = self.domestic_market.get_current_price(symbol)
-        orderbook = self.domestic_market.get_orderbook(symbol)
+        price = self._call_with_retries(lambda: self.domestic_market.get_current_price(symbol), "current_price", symbol)
+        orderbook = self._call_with_retries(lambda: self.domestic_market.get_orderbook(symbol), "orderbook", symbol)
         return self.snapshot_builder.build(symbol, candles, price, float(orderbook["spread_rate"]))
 
     def _get_domestic_cycle_symbols(self) -> list[str]:
         symbols = list(dict.fromkeys(self.watchlist_manager.get_symbols("KR") + list(self.state.positions)))
         return symbols
 
-    def _sync_domestic_positions(self) -> None:
-        for row in self.domestic_account.get_balance():
-            symbol = str(row.get("pdno") or row.get("prdt_code") or "")
-            quantity = _to_int(row.get("hldg_qty") or row.get("ord_psbl_qty") or 0)
-            average_price = _to_int(row.get("pchs_avg_pric") or row.get("avg_prvs") or 0)
-            if symbol and quantity > 0 and average_price > 0:
-                self.state.positions.setdefault(symbol, Position(symbol, quantity, average_price, datetime.now()))
+    def _sync_domestic_positions(self) -> bool:
+        try:
+            rows = self._call_with_retries(self.domestic_account.get_balance, "balance", "KR")
+        except Exception:
+            self._activate_safe_mode("BALANCE_SYNC_FAILED")
+            return False
+        account_positions = _create_positions_from_balance(rows)
+        self.state.positions = account_positions
+        self._persist_position_rows(rows)
+        return True
 
     def _position_state(self) -> PositionState:
         return PositionState(positions=tuple(self.state.positions.values()))
@@ -226,10 +294,219 @@ class AutoTradingRunner:
             daily_loss_rate=0.0,
             daily_loss_amount=self.state.daily_loss_amount,
             consecutive_loss_count=self.state.consecutive_loss_count,
+            safe_mode=self.state.safe_mode,
+            kill_switch_active=self._is_kill_switch_active(),
             daily_entry_count_by_symbol=dict(self.state.daily_entry_count_by_symbol),
             pending_order_symbols=set(self.state.pending_order_symbols),
+            order_locked_symbols=set(self.state.order_locked_symbols),
             held_symbols=set(self.state.positions.keys()),
         )
+
+    def _recover_startup_state(self) -> None:
+        try:
+            balance_rows = self._call_with_retries(self.domestic_account.get_balance, "startup_balance", "KR")
+            self.state.positions = _create_positions_from_balance(balance_rows)
+            self._persist_position_rows(balance_rows)
+            open_orders = self._call_with_retries(self.domestic_account.get_open_orders, "startup_open_orders", "KR")
+            self._restore_open_orders(open_orders)
+            executions = self._call_with_retries(self.domestic_account.get_today_executions, "startup_today_executions", "KR")
+            self._restore_daily_execution_state(executions)
+            self._persist_execution_rows(executions)
+            self.state.daily_realized_pnl = self._call_with_retries(self.domestic_account.get_daily_realized_pnl, "startup_daily_pnl", "KR")
+            self.state.daily_loss_amount = abs(min(0, self.state.daily_realized_pnl))
+            if self.state.daily_loss_amount >= self.settings.daily_max_loss_amount:
+                self._activate_kill_switch("DAILY_MAX_LOSS_AMOUNT_REACHED")
+            self.state.startup_recovered = True
+            write_trade_event(
+                "startup_recovered",
+                {
+                    **self._event_context("KR"),
+                    "positions": list(self.state.positions),
+                    "pending_buy_symbols": sorted(self.state.pending_buy_symbols),
+                    "pending_sell_symbols": sorted(self.state.pending_sell_symbols),
+                    "daily_realized_pnl": self.state.daily_realized_pnl,
+                    "daily_loss_amount": self.state.daily_loss_amount,
+                    "consecutive_losses": self.state.consecutive_loss_count,
+                    "safe_mode": self.state.safe_mode,
+                    "kill_switch_reasons": sorted(self.state.kill_switch_reasons),
+                },
+            )
+        except Exception as exc:
+            self.state.startup_recovered = True
+            self.logger.exception("[STARTUP RECOVERY FAILED]")
+            self._activate_safe_mode("STARTUP_RECOVERY_FAILED", {"error": str(exc), "error_type": exc.__class__.__name__})
+
+    def _restore_open_orders(self, rows: list[dict[str, Any]]) -> None:
+        self.state.pending_order_symbols.clear()
+        self.state.pending_buy_symbols.clear()
+        self.state.pending_sell_symbols.clear()
+        for row in rows:
+            symbol = _row_symbol(row)
+            if not symbol:
+                continue
+            side = _row_order_side(row)
+            if side == "BUY":
+                self.state.pending_buy_symbols.add(symbol)
+                self.state.pending_order_symbols.add(symbol)
+            elif side == "SELL":
+                self.state.pending_sell_symbols.add(symbol)
+                self.state.pending_order_symbols.add(symbol)
+
+    def _restore_daily_execution_state(self, rows: list[dict[str, Any]]) -> None:
+        self.state.daily_entry_count_by_symbol.clear()
+        consecutive_losses = 0
+        for row in rows:
+            symbol = _row_symbol(row)
+            side = _row_order_side(row)
+            if symbol and side == "BUY":
+                self.state.daily_entry_count_by_symbol[symbol] = self.state.daily_entry_count_by_symbol.get(symbol, 0) + 1
+            profit_loss = _row_profit_loss(row)
+            if profit_loss is None:
+                continue
+            if profit_loss < 0:
+                consecutive_losses += 1
+            elif profit_loss > 0:
+                consecutive_losses = 0
+        self.state.consecutive_loss_count = consecutive_losses
+        if self.state.consecutive_loss_count >= 3:
+            self._activate_kill_switch("MAX_CONSECUTIVE_LOSS_COUNT_REACHED")
+
+    def _sync_domestic_executions(self) -> None:
+        try:
+            rows = self._call_with_retries(self.domestic_account.get_today_executions, "today_executions", "KR")
+        except Exception:
+            self._activate_safe_mode("EXECUTION_SYNC_FAILED")
+            return
+        self._restore_daily_execution_state(rows)
+        self._persist_execution_rows(rows)
+
+    def _persist_execution_rows(self, rows: list[dict[str, Any]]) -> None:
+        if self.trade_repository is None:
+            return
+        for row in rows:
+            symbol = _row_symbol(row)
+            side = _row_order_side(row)
+            quantity = _row_execution_quantity(row)
+            price = _row_execution_price(row)
+            if not symbol or side is None or quantity < 1 or price is None:
+                continue
+            self.trade_repository.insert_execution(
+                order_id=_row_order_id(row),
+                symbol=symbol,
+                symbol_name=_row_symbol_name(row),
+                side=side,
+                quantity=quantity,
+                price=price,
+                fee=_row_float(row, ("fee", "ord_fee", "fee_amt", "cmsn_amt")),
+                tax=_row_float(row, ("tax", "tax_amt")),
+                realized_pnl=_row_float(row, ("rlzt_pfls", "realized_pnl", "trad_pfls")),
+                realized_pnl_rate=_row_float(row, ("rlzt_pfls_rt", "realized_pnl_rate", "trad_pfls_rt")),
+                strategy_name=self.bot_config.strategy.name,
+                raw_json=row,
+                created_at=_row_created_at(row),
+            )
+
+    def _persist_position_rows(self, rows: list[dict[str, Any]]) -> None:
+        if self.trade_repository is None:
+            return
+        for row in rows:
+            symbol = _row_symbol(row)
+            if not symbol:
+                continue
+            self.trade_repository.upsert_position(
+                symbol=symbol,
+                symbol_name=_row_symbol_name(row),
+                quantity=_to_int(row.get("hldg_qty") or row.get("ord_psbl_qty") or 0),
+                avg_price=_row_float(row, ("pchs_avg_pric", "avg_prvs", "avg_price")),
+                current_price=_row_float(row, ("prpr", "now_pric", "stck_prpr", "current_price")),
+                market_value=_row_float(row, ("evlu_amt", "market_value")),
+                unrealized_pnl=_row_float(row, ("evlu_pfls_amt", "unrealized_pnl")),
+                unrealized_pnl_rate=_row_float(row, ("evlu_pfls_rt", "unrealized_pnl_rate")),
+                strategy_name=self.bot_config.strategy.name if symbol in self.state.positions else None,
+                raw_json=row,
+            )
+
+    def _reconcile_uncertain_order(self, symbol: str, side: str, exc: Exception) -> bool:
+        try:
+            open_orders = self._call_with_retries(self.domestic_account.get_open_orders, "reconcile_open_orders", symbol)
+            executions = self._call_with_retries(self.domestic_account.get_today_executions, "reconcile_today_executions", symbol)
+        except Exception as reconcile_exc:
+            write_trade_event(
+                "order_reconcile_failed",
+                {
+                    **self._event_context("KR", symbol, self._get_symbol_name("KR", symbol)),
+                    "side": side,
+                    "original_error": str(exc),
+                    "reconcile_error": str(reconcile_exc),
+                },
+            )
+            return False
+        has_open_order = any(_row_symbol(row) == symbol and _row_order_side(row) == side for row in open_orders)
+        has_execution = any(_row_symbol(row) == symbol and _row_order_side(row) == side for row in executions)
+        write_trade_event(
+            "order_reconciled",
+            {
+                **self._event_context("KR", symbol, self._get_symbol_name("KR", symbol)),
+                "side": side,
+                "original_error": str(exc),
+                "has_open_order": has_open_order,
+                "has_execution": has_execution,
+            },
+        )
+        return has_open_order or has_execution
+
+    def _call_with_retries(self, callback: Callable[[], Any], operation: str, symbol: str | None = None, max_attempts: int = 2) -> Any:
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return callback()
+            except Exception as exc:
+                last_error = exc
+                self.logger.warning("[API RETRY] operation=%s symbol=%s attempt=%s error=%s", operation, symbol, attempt, exc)
+                write_trade_event(
+                    "api_call_failed",
+                    {
+                        **self._event_context("KR", symbol),
+                        "operation": operation,
+                        "attempt": attempt,
+                        "error": str(exc),
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+        self._activate_safe_mode("API_CONSECUTIVE_FAILURE", {"operation": operation, "symbol": symbol})
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"API operation failed: {operation}")
+
+    def _activate_safe_mode(self, reason: str, extra: dict | None = None) -> None:
+        self.state.safe_mode = True
+        self.state.kill_switch_reasons.add(reason)
+        self.logger.error("[SAFE MODE] reason=%s", reason)
+        write_trade_event(
+            "safe_mode_activated",
+            {
+                **self._event_context("KR"),
+                "reason": reason,
+                "kill_switch_reasons": sorted(self.state.kill_switch_reasons),
+                "extra": extra or {},
+            },
+        )
+
+    def _activate_kill_switch(self, reason: str) -> None:
+        self.state.safe_mode = True
+        self.state.kill_switch_reasons.add(reason)
+        self.logger.error("[KILL SWITCH] reason=%s", reason)
+        write_trade_event(
+            "kill_switch_activated",
+            {
+                **self._event_context("KR"),
+                "reason": reason,
+                "kill_switch_reasons": sorted(self.state.kill_switch_reasons),
+            },
+        )
+
+    def _is_kill_switch_active(self) -> bool:
+        return bool(self.state.kill_switch_reasons)
 
     def _write_strategy_decision(self, side: str, market: str, symbol: str, name: str | None, signal, snapshot) -> None:
         write_trade_event(
@@ -339,7 +616,7 @@ class AutoTradingRunner:
 
     def _risk_snapshot_payload(self) -> dict:
         return {
-            "daily_realized_pnl": None,
+            "daily_realized_pnl": self.state.daily_realized_pnl,
             "daily_loss_limit": self.settings.daily_max_loss_amount,
             "daily_loss_rate_limit": self.settings.daily_max_loss_rate,
             "daily_loss_amount": self.state.daily_loss_amount,
@@ -348,8 +625,13 @@ class AutoTradingRunner:
             "current_positions_count": len(self.state.positions),
             "held_symbols": sorted(self.state.positions),
             "pending_order_symbols": sorted(self.state.pending_order_symbols),
+            "pending_buy_symbols": sorted(self.state.pending_buy_symbols),
+            "pending_sell_symbols": sorted(self.state.pending_sell_symbols),
+            "order_locked_symbols": sorted(self.state.order_locked_symbols),
             "daily_entry_count_by_symbol": dict(self.state.daily_entry_count_by_symbol),
-            "kill_switch_status": "off",
+            "safe_mode": self.state.safe_mode,
+            "kill_switch_status": "on" if self._is_kill_switch_active() else "off",
+            "risk_block_reason": sorted(self.state.kill_switch_reasons),
         }
 
     def _is_domestic_new_buy_blocked(self) -> bool:
@@ -413,6 +695,86 @@ def _to_int(value) -> int:
     if value in (None, ""):
         return 0
     return int(float(str(value).replace(",", "")))
+
+
+def _create_positions_from_balance(rows: list[dict[str, Any]]) -> Dict[str, Position]:
+    positions = {}
+    for row in rows:
+        symbol = _row_symbol(row)
+        quantity = _to_int(row.get("hldg_qty") or row.get("ord_psbl_qty") or 0)
+        average_price = _to_int(row.get("pchs_avg_pric") or row.get("avg_prvs") or 0)
+        if symbol and quantity > 0 and average_price > 0:
+            positions[symbol] = Position(symbol, quantity, average_price, datetime.now())
+    return positions
+
+
+def _row_symbol(row: dict[str, Any]) -> str:
+    value = row.get("pdno") or row.get("prdt_code") or row.get("stck_shrn_iscd") or row.get("symbol") or ""
+    return str(value).zfill(6) if value not in (None, "") else ""
+
+
+def _row_order_side(row: dict[str, Any]) -> str | None:
+    value = row.get("sll_buy_dvsn_cd") or row.get("sll_buy_dvsn_name") or row.get("side") or row.get("ord_dvsn_name")
+    text = str(value or "").upper()
+    if text in {"02", "BUY"} or "매수" in text:
+        return "BUY"
+    if text in {"01", "SELL"} or "매도" in text:
+        return "SELL"
+    return None
+
+
+def _row_profit_loss(row: dict[str, Any]) -> int | None:
+    for key in ("rlzt_pfls", "realized_pnl", "trad_pfls", "evlu_pfls_amt"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return _to_int(value)
+    return None
+
+
+def _row_symbol_name(row: dict[str, Any]) -> str | None:
+    value = row.get("prdt_name") or row.get("prdt_name120") or row.get("hts_kor_isnm") or row.get("symbol_name")
+    return str(value) if value not in (None, "") else None
+
+
+def _row_order_id(row: dict[str, Any]) -> str | None:
+    value = row.get("odno") or row.get("ODNO") or row.get("orgn_odno") or row.get("order_id")
+    return str(value) if value not in (None, "") else None
+
+
+def _row_execution_quantity(row: dict[str, Any]) -> int:
+    return _to_int(row.get("tot_ccld_qty") or row.get("ccld_qty") or row.get("ord_qty") or row.get("quantity") or 0)
+
+
+def _row_execution_price(row: dict[str, Any]) -> float | None:
+    return _row_float(row, ("avg_prvs", "ccld_unpr", "ord_unpr", "price"))
+
+
+def _row_float(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return float(str(value).replace(",", ""))
+    return None
+
+
+def _row_created_at(row: dict[str, Any]) -> datetime:
+    date_text = str(row.get("ord_dt") or row.get("trad_dt") or row.get("ccld_dt") or row.get("trade_date") or "")
+    time_text = str(row.get("ord_tmd") or row.get("ccld_tmd") or row.get("stck_cntg_hour") or row.get("created_time") or "")
+    parsed = _parse_row_datetime(date_text, time_text)
+    return parsed if parsed is not None else datetime.now()
+
+
+def _parse_row_datetime(date_text: str, time_text: str) -> datetime | None:
+    digits_date = "".join(char for char in date_text if char.isdigit())
+    digits_time = "".join(char for char in time_text if char.isdigit())
+    if len(digits_date) != 8:
+        return None
+    if len(digits_time) < 6:
+        digits_time = digits_time.ljust(6, "0")
+    try:
+        return datetime.strptime(f"{digits_date}{digits_time[:6]}", "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
 
 
 def _rate_gap(current_price: int | float, base_price: int | float) -> float | None:

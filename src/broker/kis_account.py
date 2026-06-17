@@ -48,8 +48,64 @@ class KisAccount:
         cash = output.get("ord_psbl_cash") or output.get("nrcvb_buy_amt") or "0"
         return int(str(cash).replace(",", ""))
 
+    def get_open_orders(self) -> List[Dict[str, Any]]:
+        """Fetch domestic open orders.
+
+        @returns: KIS open order rows.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl",
+            self._open_orders_tr_id(),
+            self._open_orders_params(),
+        )
+        output = response.get("output")
+        if not isinstance(output, list):
+            raise RuntimeError(f"KIS open orders response missing output list: {response}")
+        return output
+
+    def get_today_executions(self) -> List[Dict[str, Any]]:
+        """Fetch today's domestic order executions.
+
+        @returns: KIS execution rows.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            self._daily_executions_tr_id(),
+            self._daily_executions_params(),
+        )
+        output = response.get("output1") or response.get("output")
+        if not isinstance(output, list):
+            raise RuntimeError(f"KIS daily executions response missing output list: {response}")
+        return output
+
+    def get_daily_realized_pnl(self) -> int:
+        """Fetch today's realized domestic profit/loss.
+
+        @returns: Realized profit/loss amount in KRW.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/trading/inquire-period-trade-profit",
+            self._daily_pnl_tr_id(),
+            self._daily_pnl_params(),
+        )
+        output = response.get("output2") or response.get("output")
+        if isinstance(output, list):
+            return sum(_to_int(row.get("rlzt_pfls") or row.get("tot_pftrt_amt") or 0) for row in output if isinstance(row, dict))
+        if isinstance(output, dict):
+            return _to_int(output.get("rlzt_pfls") or output.get("tot_pftrt_amt") or output.get("realized_pnl") or 0)
+        raise RuntimeError(f"KIS daily PnL response missing output: {response}")
+
     def _balance_tr_id(self) -> str:
         return "VTTC8434R" if self.client.settings.kis_is_mock else "TTTC8434R"
+
+    def _open_orders_tr_id(self) -> str:
+        return "VTTC8036R" if self.client.settings.kis_is_mock else "TTTC8036R"
+
+    def _daily_executions_tr_id(self) -> str:
+        return "VTTC8001R" if self.client.settings.kis_is_mock else "TTTC8001R"
+
+    def _daily_pnl_tr_id(self) -> str:
+        return "VTTC8715R" if self.client.settings.kis_is_mock else "TTTC8715R"
 
     def _balance_params(self) -> Dict[str, str]:
         return {
@@ -65,3 +121,56 @@ class KisAccount:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
+
+    def _open_orders_params(self) -> Dict[str, str]:
+        return {
+            "CANO": self.client.settings.kis_account_no,
+            "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+            "INQR_DVSN_1": "0",
+            "INQR_DVSN_2": "0",
+        }
+
+    def _daily_executions_params(self) -> Dict[str, str]:
+        return {
+            "CANO": self.client.settings.kis_account_no,
+            "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
+            "INQR_STRT_DT": _today_text(),
+            "INQR_END_DT": _today_text(),
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+    def _daily_pnl_params(self) -> Dict[str, str]:
+        return {
+            "CANO": self.client.settings.kis_account_no,
+            "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
+            "SORT_DVSN": "00",
+            "PDNO": "",
+            "INQR_STRT_DT": _today_text(),
+            "INQR_END_DT": _today_text(),
+            "CBLC_DVSN": "00",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+
+def _to_int(value: Any) -> int:
+    if value in (None, ""):
+        return 0
+    return int(float(str(value).replace(",", "")))
+
+
+def _today_text() -> str:
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y%m%d")

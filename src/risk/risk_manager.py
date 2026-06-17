@@ -12,8 +12,11 @@ class RiskState:
     daily_loss_rate: float = 0.0
     daily_loss_amount: int = 0
     consecutive_loss_count: int = 0
+    safe_mode: bool = False
+    kill_switch_active: bool = False
     daily_entry_count_by_symbol: Dict[str, int] = field(default_factory=dict)
     pending_order_symbols: Set[str] = field(default_factory=set)
+    order_locked_symbols: Set[str] = field(default_factory=set)
     held_symbols: Set[str] = field(default_factory=set)
 
 
@@ -29,6 +32,12 @@ class RiskManager:
         @param state: Current risk state.
         @returns: Tuple of allowed flag and reason.
         """
+        if state.kill_switch_active:
+            return False, "KILL_SWITCH_ACTIVE"
+        if state.safe_mode:
+            return False, "SAFE_MODE_ACTIVE"
+        if symbol in state.order_locked_symbols:
+            return False, "ORDER_LOCKED"
         if symbol in state.pending_order_symbols:
             return False, "PENDING_ORDER_EXISTS"
         if symbol in state.held_symbols:

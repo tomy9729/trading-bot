@@ -27,6 +27,22 @@ def test_blocks_consecutive_losses():
     assert reason == "MAX_CONSECUTIVE_LOSS_COUNT_REACHED"
 
 
+def test_blocks_safe_mode_and_kill_switch():
+    allowed, reason = _manager().can_enter("005930", RiskState(safe_mode=True))
+    assert allowed is False
+    assert reason == "SAFE_MODE_ACTIVE"
+
+    allowed, reason = _manager().can_enter("005930", RiskState(kill_switch_active=True))
+    assert allowed is False
+    assert reason == "KILL_SWITCH_ACTIVE"
+
+
+def test_blocks_order_locked_symbol():
+    allowed, reason = _manager().can_enter("005930", RiskState(order_locked_symbols={"005930"}))
+    assert allowed is False
+    assert reason == "ORDER_LOCKED"
+
+
 def test_detects_force_exit_time():
     assert _manager().is_force_exit_time(time(15, 15)) is True
     assert _manager().is_force_exit_time(time(15, 14)) is False

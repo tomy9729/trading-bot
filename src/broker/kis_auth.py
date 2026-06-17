@@ -58,6 +58,10 @@ class KisAuth:
         self._save_cached_token(self._token)
         return self._token.value
 
+    def invalidate_access_token(self) -> None:
+        """Clear the in-memory access token after an authentication failure."""
+        self._token = None
+
     def _load_cached_token(self) -> Optional[AccessToken]:
         if not self._cache_path.exists():
             return None

@@ -2,15 +2,17 @@ from datetime import datetime, time
 from typing import Any, Dict
 
 from src.broker.kis_client import KisClient
+from src.db.repository import TradingRepository
 from src.domain.order import OrderRequest, OrderResult
 from src.logs.trade_logger import get_trade_logger, write_trade_event
 from src.runner.market_hours import MarketHours
 
 
 class KisOrder:
-    def __init__(self, client: KisClient, market_hours: MarketHours | None = None):
+    def __init__(self, client: KisClient, market_hours: MarketHours | None = None, trade_repository: TradingRepository | None = None):
         self.client = client
         self.market_hours = market_hours or MarketHours()
+        self.trade_repository = trade_repository
         self.logger = get_trade_logger()
 
     def buy_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
@@ -67,6 +69,7 @@ class KisOrder:
         }
         tr_id = self._order_tr_id(side)
         self.logger.info("[ORDER REQUEST] side=%s symbol=%s quantity=%s tr_id=%s", side, symbol, quantity, tr_id)
+        order_row_id = self._insert_order_request(request)
         write_trade_event(
             "order_requested",
             {
@@ -89,6 +92,7 @@ class KisOrder:
             )
         except Exception as exc:
             self.logger.exception("[ORDER FAILED] side=%s symbol=%s quantity=%s", side, symbol, quantity)
+            self._update_order_status(order_row_id, None, "FAILED", str(exc), {"error": str(exc), "error_type": exc.__class__.__name__})
             write_trade_event(
                 "order_failed",
                 {
@@ -106,6 +110,8 @@ class KisOrder:
                 },
             )
             raise
+        order_id = _get_order_id(response)
+        self._update_order_status(order_row_id, order_id, "ACCEPTED", None, response)
         self.logger.info("[ORDER RESPONSE] side=%s symbol=%s response=%s", side, symbol, response)
         write_trade_event(
             "order_response",
@@ -118,7 +124,7 @@ class KisOrder:
                 "requested_quantity": quantity,
                 "tr_id": tr_id,
                 "order_status": "accepted",
-                "order_id": _get_order_id(response),
+                "order_id": order_id,
                 "order_result": response,
                 "dry_run": False,
             },
@@ -142,6 +148,42 @@ class KisOrder:
             raise RuntimeError(
                 f"Live buy is blocked after the new-buy limit time: current_time={now_time.strftime('%H:%M:%S')}"
             )
+
+    def _insert_order_request(self, request: OrderRequest) -> int | None:
+        if self.trade_repository is None:
+            return None
+        return self.trade_repository.insert_order(
+            symbol=request.symbol,
+            side=request.side,
+            quantity=request.quantity,
+            price=0,
+            order_type=request.order_type,
+            status="REQUESTED",
+            raw_json={
+                "symbol": request.symbol,
+                "side": request.side,
+                "quantity": request.quantity,
+                "order_type": request.order_type,
+            },
+        )
+
+    def _update_order_status(
+        self,
+        order_row_id: int | None,
+        order_id: str | None,
+        status: str,
+        reason: str | None,
+        raw_json: Dict[str, Any] | None,
+    ) -> None:
+        if self.trade_repository is None:
+            return
+        self.trade_repository.update_order_status(
+            order_row_id=order_row_id,
+            order_id=order_id,
+            status=status,
+            reason=reason,
+            raw_json=raw_json,
+        )
 
 
 def _get_order_id(response: Dict[str, Any]) -> str | None:

@@ -100,7 +100,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
     watchlist_kr = watchlist.get("kr", {})
     if not isinstance(watchlist_kr, dict):
         raise ValueError("config.watchlist.kr must be a mapping")
-    return BotConfig(
+    bot_config = BotConfig(
         korea=KoreaMarketConfig(
             enabled=bool(korea.get("enabled", True)),
             regular_open=str(korea.get("regular_open", "09:00")),
@@ -156,6 +156,46 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             ),
         ),
     )
+    validate_bot_config(bot_config)
+    return bot_config
+
+
+def validate_bot_config(bot_config: BotConfig) -> None:
+    """Validate non-secret bot configuration.
+
+    @param bot_config: Loaded bot config.
+    @raises ValueError: If a setting can make live operation unsafe.
+    """
+    if bot_config.risk.max_buy_amount_per_trade <= 0:
+        raise ValueError("risk.max_buy_amount_per_trade must be greater than 0")
+    if bot_config.risk.max_position_count <= 0:
+        raise ValueError("risk.max_position_count must be greater than 0")
+    if bot_config.risk.max_daily_loss <= 0:
+        raise ValueError("risk.max_daily_loss must be greater than 0")
+    if bot_config.risk.max_daily_loss_percent >= 0:
+        raise ValueError("risk.max_daily_loss_percent must be negative")
+    if bot_config.risk.stop_loss_percent >= 0:
+        raise ValueError("risk.stop_loss_percent must be negative")
+    if bot_config.risk.take_profit_percent <= 0:
+        raise ValueError("risk.take_profit_percent must be greater than 0")
+    if bot_config.risk.second_take_profit_percent <= 0:
+        raise ValueError("risk.second_take_profit_percent must be greater than 0")
+    if not 0 < bot_config.risk.partial_take_profit_ratio <= 1:
+        raise ValueError("risk.partial_take_profit_ratio must be greater than 0 and less than or equal to 1")
+    if bot_config.risk.reentry_cooldown_minutes < 0:
+        raise ValueError("risk.reentry_cooldown_minutes must be greater than or equal to 0")
+    if bot_config.strategy.volume_multiplier <= 0:
+        raise ValueError("strategy.volume_multiplier must be greater than 0")
+    if bot_config.strategy.vwap_entry_price_ratio <= 0:
+        raise ValueError("strategy.vwap_entry_price_ratio must be greater than 0")
+    if bot_config.strategy.volume_lookback_minutes <= 0:
+        raise ValueError("strategy.volume_lookback_minutes must be greater than 0")
+    if bot_config.strategy.breakout_window_minutes <= 0:
+        raise ValueError("strategy.breakout_window_minutes must be greater than 0")
+    if bot_config.korea.stop_new_buy_before_close_minutes < 0:
+        raise ValueError("market.korea.stop_new_buy_before_close_minutes must be greater than or equal to 0")
+    if bot_config.korea.force_sell_before_close_minutes < 0:
+        raise ValueError("market.korea.force_sell_before_close_minutes must be greater than or equal to 0")
 
 
 def _get_dict(data: dict[str, Any], key: str) -> dict[str, Any]:

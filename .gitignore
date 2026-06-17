@@ -2,6 +2,8 @@
 .env.*
 !.env.example
 logs/
+data/
+*.db
 .kis_token_cache.json
 __pycache__/
 .pytest_cache/

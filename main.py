@@ -8,6 +8,7 @@ from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
 from src.config.bot_config import load_bot_config
 from src.config.env import load_settings
+from src.db.repository import TradingRepository
 from src.logs.trade_logger import get_trade_logger
 from src.runner.auto_trading_runner import AutoTradingRunner
 from src.runner.dry_run_runner import DryRunRunner
@@ -37,11 +38,12 @@ def main() -> int:
     try:
         settings = load_settings()
         bot_config = load_bot_config()
+        trade_repository = TradingRepository()
         client = KisClient(settings)
         market_hours = MarketHours()
         market = KisMarket(client)
         account = KisAccount(client)
-        order = KisOrder(client, market_hours)
+        order = KisOrder(client, market_hours, trade_repository)
         watchlist_manager = WatchlistManager(bot_config, market_hours, market)
         dry_runner = DryRunRunner(market, account, order)
         live_runner = LiveRunner(market, account, order)
@@ -53,6 +55,7 @@ def main() -> int:
             account,
             order,
             watchlist_manager,
+            trade_repository,
         )
 
         logger.info("[START] mode=%s market=domestic dry_run=%s mock=%s", args.mode, settings.dry_run, settings.kis_is_mock)

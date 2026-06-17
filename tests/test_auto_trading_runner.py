@@ -73,6 +73,9 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
 
     domestic_account = Mock()
     domestic_account.get_balance.return_value = []
+    domestic_account.get_open_orders.return_value = []
+    domestic_account.get_today_executions.return_value = []
+    domestic_account.get_daily_realized_pnl.return_value = 0
     domestic_account.get_available_cash.return_value = 100000
 
     domestic_order = Mock()
@@ -97,7 +100,7 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
     domestic_order.buy_market.assert_called_once_with("005930", 1)
 
 
-def test_auto_runner_continues_buy_attempts_after_order_failure():
+def test_auto_runner_enters_safe_mode_after_uncertain_order_failure():
     market_hours = Mock()
     market_hours.korea_tz = ZoneInfo("Asia/Seoul")
     market_hours.is_domestic_open.return_value = True
@@ -109,6 +112,9 @@ def test_auto_runner_continues_buy_attempts_after_order_failure():
 
     domestic_account = Mock()
     domestic_account.get_balance.return_value = []
+    domestic_account.get_open_orders.return_value = []
+    domestic_account.get_today_executions.return_value = []
+    domestic_account.get_daily_realized_pnl.return_value = 0
     domestic_account.get_available_cash.return_value = 100000
 
     domestic_order = Mock()
@@ -130,5 +136,106 @@ def test_auto_runner_continues_buy_attempts_after_order_failure():
 
     runner.run_once()
 
-    assert domestic_order.buy_market.call_args_list[0].args == ("005930", 1)
-    assert domestic_order.buy_market.call_args_list[1].args == ("000660", 1)
+    domestic_order.buy_market.assert_called_once_with("005930", 1)
+    assert runner.state.safe_mode is True
+    assert "BUY_ORDER_STATUS_UNCERTAIN" in runner.state.kill_switch_reasons
+
+
+def test_auto_runner_restores_position_and_blocks_duplicate_buy_after_restart():
+    market_hours = Mock()
+    market_hours.korea_tz = ZoneInfo("Asia/Seoul")
+    market_hours.is_domestic_open.return_value = True
+
+    domestic_market = Mock()
+    domestic_market.get_minute_chart.return_value = _minute_rows()
+    domestic_market.get_current_price.return_value = 1006
+    domestic_market.get_orderbook.return_value = {"spread_rate": 0.1}
+
+    domestic_account = Mock()
+    domestic_account.get_balance.return_value = [{"pdno": "005930", "hldg_qty": "1", "pchs_avg_pric": "1000"}]
+    domestic_account.get_open_orders.return_value = []
+    domestic_account.get_today_executions.return_value = []
+    domestic_account.get_daily_realized_pnl.return_value = 0
+
+    domestic_order = Mock()
+    watchlist_manager = Mock()
+    watchlist_manager.get_symbols.return_value = ["005930"]
+    watchlist_manager.is_watchable.return_value = True
+
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        market_hours,
+        domestic_market,
+        domestic_account,
+        domestic_order,
+        watchlist_manager,
+    )
+    runner._is_domestic_force_sell_time = Mock(return_value=False)
+
+    runner.run_once()
+
+    domestic_order.buy_market.assert_not_called()
+    assert "005930" in runner.state.positions
+
+
+def test_auto_runner_restores_pending_buy_order_and_blocks_duplicate_buy():
+    market_hours = Mock()
+    market_hours.korea_tz = ZoneInfo("Asia/Seoul")
+    market_hours.is_domestic_open.return_value = True
+
+    domestic_market = Mock()
+    domestic_market.get_minute_chart.return_value = _minute_rows()
+    domestic_market.get_current_price.return_value = 1010
+    domestic_market.get_orderbook.return_value = {"spread_rate": 0.1}
+
+    domestic_account = Mock()
+    domestic_account.get_balance.return_value = []
+    domestic_account.get_open_orders.return_value = [{"pdno": "005930", "sll_buy_dvsn_cd": "02"}]
+    domestic_account.get_today_executions.return_value = []
+    domestic_account.get_daily_realized_pnl.return_value = 0
+    domestic_account.get_available_cash.return_value = 100000
+
+    domestic_order = Mock()
+    watchlist_manager = Mock()
+    watchlist_manager.get_symbols.return_value = ["005930"]
+    watchlist_manager.is_watchable.return_value = True
+
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        market_hours,
+        domestic_market,
+        domestic_account,
+        domestic_order,
+        watchlist_manager,
+    )
+
+    runner.run_once()
+
+    domestic_order.buy_market.assert_not_called()
+    assert "005930" in runner.state.pending_buy_symbols
+
+
+def test_auto_runner_enters_safe_mode_when_startup_recovery_fails():
+    market_hours = Mock()
+    market_hours.korea_tz = ZoneInfo("Asia/Seoul")
+    market_hours.is_domestic_open.return_value = True
+
+    domestic_account = Mock()
+    domestic_account.get_balance.side_effect = RuntimeError("balance failed")
+
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        market_hours,
+        Mock(),
+        domestic_account,
+        Mock(),
+        Mock(),
+    )
+
+    runner.run_once()
+
+    assert runner.state.safe_mode is True
+    assert "STARTUP_RECOVERY_FAILED" in runner.state.kill_switch_reasons

@@ -63,3 +63,22 @@ def test_kis_client_throttles_between_requests():
             client.get("/path", "TRID", {})
 
     sleep.assert_called_once_with(0.4000000000000057)
+
+
+def test_kis_client_refreshes_token_after_auth_error():
+    session = Mock()
+    session.request.side_effect = [
+        FakeResponse(401, {"rt_cd": "1", "msg_cd": "EGW00123"}),
+        FakeResponse(200, {"rt_cd": "0", "output": {"ok": True}}),
+    ]
+    client = KisClient(_settings(), session)
+    client.auth.get_access_token = Mock(side_effect=["expired-token", "fresh-token"])
+    client.auth.invalidate_access_token = Mock()
+
+    result = client.get("/path", "TRID", {})
+
+    assert result["output"]["ok"] is True
+    assert session.request.call_count == 2
+    client.auth.invalidate_access_token.assert_called_once()
+    assert session.request.call_args_list[0].kwargs["headers"]["authorization"] == "Bearer expired-token"
+    assert session.request.call_args_list[1].kwargs["headers"]["authorization"] == "Bearer fresh-token"
