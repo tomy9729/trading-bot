@@ -73,7 +73,9 @@ class KisAccount:
             self._daily_executions_tr_id(),
             self._daily_executions_params(),
         )
-        output = response.get("output1") or response.get("output")
+        output = response.get("output1")
+        if output is None:
+            output = response.get("output")
         if not isinstance(output, list):
             raise RuntimeError(f"KIS daily executions response missing output list: {response}")
         return output

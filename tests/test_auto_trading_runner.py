@@ -2,6 +2,8 @@ from datetime import datetime
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.config.bot_config import (
     BotConfig,
     KoreaMarketConfig,
@@ -11,7 +13,7 @@ from src.config.bot_config import (
     WatchlistConfig,
 )
 from src.config.env import Settings
-from src.runner.auto_trading_runner import AutoTradingRunner
+from src.runner.auto_trading_runner import AutoTradingRunner, _is_in_entry_windows
 
 
 def _settings() -> Settings:
@@ -239,3 +241,22 @@ def test_auto_runner_enters_safe_mode_when_startup_recovery_fails():
 
     assert runner.state.safe_mode is True
     assert "STARTUP_RECOVERY_FAILED" in runner.state.kill_switch_reasons
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected"),
+    [
+        (9, 9, False),
+        (9, 10, True),
+        (11, 45, True),
+        (12, 10, True),
+        (12, 59, True),
+        (13, 0, True),
+        (15, 0, True),
+        (15, 1, False),
+    ],
+)
+def test_domestic_entry_window_includes_lunch_and_end_time(hour, minute, expected):
+    now = datetime(2026, 6, 18, hour, minute, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert _is_in_entry_windows(now, (("09:10", "15:00"),)) is expected

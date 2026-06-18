@@ -6,14 +6,13 @@ market:
         stop_new_buy_before_close_minutes: 10
         force_sell_before_close_minutes: 10
         entry_windows:
-            - ["09:10", "11:30"]
-            - ["13:00", "15:00"]
+            - ["09:10", "15:00"]
         watchlist:
             - "005930"
 
 strategy:
     name: "vwap-volume-breakout-scalping"
-    volume_multiplier: 2.0
+    volume_multiplier: 1.5
     breakout_window_minutes: 5
     volume_lookback_minutes: 5
     vwap_hold_candles: 3
@@ -25,7 +24,7 @@ strategy:
     market_down_block_threshold_percent: -0.5
 
 risk:
-    max_buy_amount_per_trade: 100000
+    max_buy_amount_per_trade: 500000
     max_daily_loss: 5000
     max_daily_loss_percent: -1.5
     max_daily_trade_count: 5

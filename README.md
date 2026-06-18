@@ -44,6 +44,7 @@ KIS_IS_MOCK=false
 DRY_RUN=true
 FORCE_QUANTITY=
 MAX_ORDER_AMOUNT=100000
+MAX_BUY_AMOUNT_PER_TRADE=500000
 MAX_POSITION_COUNT=1
 DAILY_MAX_LOSS_RATE=-2.0
 DAILY_MAX_LOSS_AMOUNT=20000
@@ -55,6 +56,8 @@ KIS_RATE_LIMIT_MAX_ATTEMPTS=3
 ```
 
 전략, 리스크, 관심종목은 [config.yaml](config.yaml)에서 관리합니다.
+
+자동매매의 종목별 1회 최대 매수 금액은 `risk.max_buy_amount_per_trade`로 설정합니다. `.env`에 `MAX_BUY_AMOUNT_PER_TRADE`를 지정하면 `config.yaml` 값보다 우선합니다. 예를 들어 `500000`은 한 종목당 최대 50만 원 범위에서 현재가와 주문 가능 현금에 맞춰 정수 수량을 계산합니다. 변경한 환경변수는 봇을 재시작해야 적용됩니다.
 
 ## 실행 방법
 
@@ -100,10 +103,13 @@ python main.py --mode test-sell --symbol 005930 --quantity 1
 - 중복 주문 락이 걸려 있지 않음
 - 일일 손실 제한에 도달하지 않음
 
-국내장 신규 진입 허용 시간 기본값:
+## 국내장 신규 진입 허용 시간
 
-- `09:10~11:30`
-- `13:00~15:00`
+국내장 신규 진입 허용 시간 기본값은 `09:10~15:00`이다.
+
+거래량이 부족한 종목은 시간 조건이 아니라 기존 거래량/거래대금 조건에서 필터링된다.
+
+단, 장 시작 직후 과열 구간과 장 마감 직전 리스크를 피하기 위해 신규 진입 허용 시간은 정규장 전체가 아니라 `09:10~15:00`으로 제한한다.
 
 ### VWAP 진입 기준 조정
 

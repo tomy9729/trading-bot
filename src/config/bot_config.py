@@ -107,7 +107,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             regular_close=str(korea.get("regular_close", "15:30")),
             stop_new_buy_before_close_minutes=int(korea.get("stop_new_buy_before_close_minutes", 10)),
             force_sell_before_close_minutes=int(korea.get("force_sell_before_close_minutes", 10)),
-            entry_windows=_create_entry_windows(korea.get("entry_windows", [["09:10", "11:00"], ["13:30", "14:40"]])),
+            entry_windows=_create_entry_windows(korea.get("entry_windows", [["09:10", "15:00"]])),
             watchlist=tuple(str(symbol) for symbol in korea.get("watchlist", [])),
         ),
         strategy=StrategyConfig(
@@ -125,7 +125,10 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             vwap_entry_price_ratio=_get_positive_float_env("VWAP_ENTRY_PRICE_RATIO", 1.0),
         ),
         risk=RiskConfig(
-            max_buy_amount_per_trade=int(risk.get("max_buy_amount_per_trade", 100000)),
+            max_buy_amount_per_trade=_get_positive_int_env(
+                "MAX_BUY_AMOUNT_PER_TRADE",
+                int(risk.get("max_buy_amount_per_trade", 100000)),
+            ),
             max_daily_loss=int(risk.get("max_daily_loss", 30000)),
             max_daily_loss_percent=float(risk.get("max_daily_loss_percent", -1.5)),
             max_daily_trade_count=int(risk.get("max_daily_trade_count", 5)),
@@ -217,6 +220,16 @@ def _get_positive_float_env(name: str, default: float) -> float:
     if value <= 0:
         raise ValueError(f"{name} must be greater than 0")
     return value
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    parsed_value = int(value)
+    if parsed_value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return parsed_value
 
 
 def _create_entry_windows(items: Any) -> tuple[tuple[str, str], ...]:

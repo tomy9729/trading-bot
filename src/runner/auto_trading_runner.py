@@ -686,7 +686,7 @@ def _parse_hhmm(value: str, now: datetime) -> datetime:
 
 def _is_in_entry_windows(now: datetime, windows: tuple[tuple[str, str], ...]) -> bool:
     for start, end in windows:
-        if _parse_hhmm(start, now) <= now < _parse_hhmm(end, now):
+        if _parse_hhmm(start, now) <= now <= _parse_hhmm(end, now):
             return True
     return False
 
