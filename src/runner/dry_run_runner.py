@@ -4,22 +4,18 @@ from src.broker.kis_order import KisOrder
 from src.logs.trade_logger import get_trade_logger
 
 
-def calculate_order_quantity(current_price: int, available_cash: int, max_order_amount: int, force_quantity: int | None) -> int:
-    """Calculate order quantity from cash and configured order amount.
+def calculate_order_quantity(available_buy_quantity: int, force_quantity: int | None) -> int:
+    """Calculate order quantity from the quantity allowed by the broker.
 
-    @param current_price: Current stock price.
-    @param available_cash: Available order cash.
-    @param max_order_amount: Maximum amount per order.
+    @param available_buy_quantity: Maximum market-buy quantity returned by KIS.
     @param force_quantity: Optional forced quantity.
     @returns: Quantity to order, or 0 when order is not possible.
     """
-    if current_price <= 0 or available_cash <= 0:
+    if available_buy_quantity <= 0:
         return 0
     if force_quantity is not None:
-        required_cash = current_price * force_quantity
-        return force_quantity if required_cash <= available_cash else 0
-    order_amount = min(max_order_amount, available_cash)
-    return order_amount // current_price
+        return force_quantity if force_quantity <= available_buy_quantity else 0
+    return available_buy_quantity
 
 
 class DryRunRunner:

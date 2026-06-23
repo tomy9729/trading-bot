@@ -27,6 +27,18 @@ def test_blocks_consecutive_losses():
     assert reason == "MAX_CONSECUTIVE_LOSS_COUNT_REACHED"
 
 
+def test_allows_entry_when_daily_loss_limit_is_disabled():
+    manager = RiskManager(_manager().settings, enforce_daily_loss_limit=False)
+
+    allowed, reason = manager.can_enter(
+        "005930",
+        RiskState(daily_loss_rate=-10.0, daily_loss_amount=100000),
+    )
+
+    assert allowed is True
+    assert reason == "OK"
+
+
 def test_blocks_safe_mode_and_kill_switch():
     allowed, reason = _manager().can_enter("005930", RiskState(safe_mode=True))
     assert allowed is False

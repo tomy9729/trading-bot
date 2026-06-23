@@ -2,7 +2,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from src.config.bot_config import TradingCostConfig
 from src.report.report_parser import ReportEvent
+from src.risk.trading_cost import calculate_trade_cost_result
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,8 @@ class TradeRecord:
     price: float | None
     quantity: float | None
     amount: float | None
+    gross_profit_loss: float | None
+    total_cost: float | None
     return_rate: float | None
     profit_loss: float | None
     reason: str
@@ -28,6 +32,8 @@ class ClosedTrade:
     sell_time: str
     sell_price: float | None
     hold_minutes: float | None
+    gross_profit_loss: float | None
+    total_cost: float | None
     return_rate: float | None
     profit_loss: float | None
     buy_reason: str
@@ -58,7 +64,7 @@ class ReportAnalysis:
     reject_counts: dict[str, int] = field(default_factory=dict)
 
 
-def analyze_trades(events: list[ReportEvent]) -> ReportAnalysis:
+def analyze_trades(events: list[ReportEvent], cost_config: TradingCostConfig | None = None) -> ReportAnalysis:
     """Analyze actual buy and sell results from parsed events.
 
     @param events: Parsed report events.
@@ -90,7 +96,12 @@ def analyze_trades(events: list[ReportEvent]) -> ReportAnalysis:
             records.append(record)
             open_by_symbol[record.symbol] = record
         elif event.event_type == "SELL_ORDER_FILLED":
-            record = _create_sell_record(event, open_by_symbol.get(str(event.data.get("symbol") or "")), last_sell_signal_by_symbol.get(str(event.data.get("symbol") or "")))
+            record = _create_sell_record(
+                event,
+                open_by_symbol.get(str(event.data.get("symbol") or "")),
+                last_sell_signal_by_symbol.get(str(event.data.get("symbol") or "")),
+                cost_config,
+            )
             records.append(record)
             buy_record = open_by_symbol.pop(record.symbol, None)
             closed_trades.append(_create_closed_trade(buy_record, record, last_sell_signal_by_symbol.get(record.symbol)))
@@ -111,13 +122,20 @@ def _create_buy_record(event: ReportEvent, signal_event: ReportEvent | None) -> 
         price=price,
         quantity=quantity,
         amount=_amount(price, quantity),
+        gross_profit_loss=None,
+        total_cost=None,
         return_rate=None,
         profit_loss=None,
         reason=reason,
     )
 
 
-def _create_sell_record(event: ReportEvent, buy_record: TradeRecord | None, signal_event: ReportEvent | None) -> TradeRecord:
+def _create_sell_record(
+    event: ReportEvent,
+    buy_record: TradeRecord | None,
+    signal_event: ReportEvent | None,
+    cost_config: TradingCostConfig | None,
+) -> TradeRecord:
     signal_details = _details(signal_event)
     price = _to_float(event.data.get("exit_price"))
     if price is None:
@@ -125,9 +143,27 @@ def _create_sell_record(event: ReportEvent, buy_record: TradeRecord | None, sign
     quantity = _to_float(event.data.get("quantity"))
     return_rate = _to_float(signal_details.get("profit_rate"))
     profit_loss = None
+    gross_profit_loss = None
+    total_cost = None
     if price is not None and quantity is not None and buy_record is not None and buy_record.price is not None:
-        profit_loss = (price - buy_record.price) * quantity
-        return_rate = ((price - buy_record.price) / buy_record.price) * 100
+        if cost_config is None:
+            profit_loss = (price - buy_record.price) * quantity
+            gross_profit_loss = profit_loss
+            total_cost = 0.0
+            return_rate = ((price - buy_record.price) / buy_record.price) * 100
+        else:
+            result = calculate_trade_cost_result(
+                buy_record.price,
+                price,
+                quantity,
+                buy_fee_percent=cost_config.buy_fee_percent,
+                sell_fee_percent=cost_config.sell_fee_percent,
+                sell_tax_percent=cost_config.sell_tax_percent,
+            )
+            gross_profit_loss = result.gross_profit_loss
+            total_cost = result.total_cost
+            profit_loss = result.net_profit_loss
+            return_rate = result.net_return_rate
     elif price is not None and quantity is not None and return_rate is not None:
         entry_price = price / (1 + (return_rate / 100))
         profit_loss = (price - entry_price) * quantity
@@ -139,6 +175,8 @@ def _create_sell_record(event: ReportEvent, buy_record: TradeRecord | None, sign
         price=price,
         quantity=quantity,
         amount=_amount(price, quantity),
+        gross_profit_loss=gross_profit_loss,
+        total_cost=total_cost,
         return_rate=return_rate,
         profit_loss=profit_loss,
         reason=str(event.data.get("reason") or (signal_event.data.get("reason") if signal_event is not None else "분석 불가")),
@@ -155,6 +193,8 @@ def _create_closed_trade(buy_record: TradeRecord | None, sell_record: TradeRecor
         sell_time=sell_record.time,
         sell_price=sell_record.price,
         hold_minutes=hold_minutes,
+        gross_profit_loss=sell_record.gross_profit_loss,
+        total_cost=sell_record.total_cost,
         return_rate=sell_record.return_rate,
         profit_loss=sell_record.profit_loss,
         buy_reason=buy_record.reason if buy_record is not None else "분석 불가",

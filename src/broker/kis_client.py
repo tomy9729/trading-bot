@@ -8,6 +8,22 @@ from src.config.env import Settings
 from src.logs.trade_logger import get_trade_logger
 
 
+class KisApiError(RuntimeError):
+    def __init__(self, tr_id: str, status_code: int, response: Dict[str, Any]):
+        self.tr_id = tr_id
+        self.status_code = status_code
+        self.response = response
+        super().__init__(f"KIS API request failed: tr_id={tr_id}, status={status_code}, response={response}")
+
+    @property
+    def is_definitive_rejection(self) -> bool:
+        """Return whether KIS explicitly rejected the request.
+
+        @returns: True when KIS returned a successful HTTP response with a non-zero result code.
+        """
+        return self.status_code < 400 and str(self.response.get("rt_cd", "0")) != "0"
+
+
 class KisClient:
     RATE_LIMIT_ERROR_CODES = {"EGW00201", "EGW00215"}
     AUTH_ERROR_CODES = {"EGW00123", "EGW00121", "EGW00110", "EGW00111", "EGW00112"}
@@ -119,7 +135,7 @@ class KisClient:
             time.sleep(wait_seconds)
 
         status_code, data = last_response or (0, {})
-        raise RuntimeError(f"KIS API request failed: tr_id={tr_id}, status={status_code}, response={data}")
+        raise KisApiError(tr_id, status_code, data)
 
     def _is_auth_error(self, status_code: int, data: Dict[str, Any]) -> bool:
         if status_code in {401, 403}:

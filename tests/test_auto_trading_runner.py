@@ -10,9 +10,11 @@ from src.config.bot_config import (
     KrWatchlistConfig,
     RiskConfig,
     StrategyConfig,
+    TradingCostConfig,
     WatchlistConfig,
 )
 from src.config.env import Settings
+from src.broker.kis_client import KisApiError
 from src.runner.auto_trading_runner import AutoTradingRunner, _is_in_entry_windows
 
 
@@ -25,7 +27,7 @@ def _bot_config() -> BotConfig:
         korea=KoreaMarketConfig(True, "09:00", "15:30", 10, 10, (("09:10", "11:00"),), ("005930",)),
         strategy=StrategyConfig("test", 2.0, 5, 5, 2, 15.0, -2.0, 55.0, 0.3, 60.0, -0.5),
         risk=RiskConfig(
-            max_buy_amount_per_trade=100000,
+            enforce_daily_loss_limit=True,
             max_daily_loss=5000,
             max_daily_loss_percent=-1.5,
             max_daily_trade_count=5,
@@ -40,6 +42,7 @@ def _bot_config() -> BotConfig:
             unfilled_order_timeout_seconds=30,
             reentry_cooldown_minutes=15,
         ),
+        cost=TradingCostConfig(0.015, 0.015, 0.2, 0.05),
         watchlist=WatchlistConfig(
             kr=KrWatchlistConfig(True, "dynamic", 50, 180, 10, True, True, True, 1000, 0.3, 10000000),
         ),
@@ -78,7 +81,7 @@ def test_auto_runner_places_domestic_dry_run_buy_when_signal_is_allowed():
     domestic_account.get_open_orders.return_value = []
     domestic_account.get_today_executions.return_value = []
     domestic_account.get_daily_realized_pnl.return_value = 0
-    domestic_account.get_available_cash.return_value = 100000
+    domestic_account.get_available_buy_quantity.return_value = 1
 
     domestic_order = Mock()
     domestic_order.buy_market.return_value = {"dry_run": True}
@@ -117,7 +120,7 @@ def test_auto_runner_enters_safe_mode_after_uncertain_order_failure():
     domestic_account.get_open_orders.return_value = []
     domestic_account.get_today_executions.return_value = []
     domestic_account.get_daily_realized_pnl.return_value = 0
-    domestic_account.get_available_cash.return_value = 100000
+    domestic_account.get_available_buy_quantity.return_value = 1
 
     domestic_order = Mock()
     domestic_order.buy_market.side_effect = [RuntimeError("order failed"), {"dry_run": True}]
@@ -141,6 +144,51 @@ def test_auto_runner_enters_safe_mode_after_uncertain_order_failure():
     domestic_order.buy_market.assert_called_once_with("005930", 1)
     assert runner.state.safe_mode is True
     assert "BUY_ORDER_STATUS_UNCERTAIN" in runner.state.kill_switch_reasons
+
+
+def test_auto_runner_does_not_enter_safe_mode_after_definitive_order_rejection():
+    market_hours = Mock()
+    market_hours.korea_tz = ZoneInfo("Asia/Seoul")
+    market_hours.is_domestic_open.return_value = True
+
+    domestic_market = Mock()
+    domestic_market.get_minute_chart.return_value = _minute_rows()
+    domestic_market.get_current_price.return_value = 1010
+    domestic_market.get_orderbook.return_value = {"spread_rate": 0.1}
+
+    domestic_account = Mock()
+    domestic_account.get_balance.return_value = []
+    domestic_account.get_open_orders.return_value = []
+    domestic_account.get_today_executions.return_value = []
+    domestic_account.get_daily_realized_pnl.return_value = 0
+    domestic_account.get_available_buy_quantity.return_value = 1
+
+    domestic_order = Mock()
+    domestic_order.buy_market.side_effect = KisApiError(
+        "TTTC0802U",
+        200,
+        {"rt_cd": "7", "msg_cd": "APBK0952", "msg1": "주문가능금액을 초과 했습니다"},
+    )
+    watchlist_manager = Mock()
+    watchlist_manager.get_symbols.return_value = ["005930"]
+    watchlist_manager.is_watchable.return_value = True
+
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        market_hours,
+        domestic_market,
+        domestic_account,
+        domestic_order,
+        watchlist_manager,
+    )
+    runner._is_domestic_new_buy_blocked = Mock(return_value=False)
+
+    runner.run_once()
+
+    domestic_order.buy_market.assert_called_once_with("005930", 1)
+    assert runner.state.safe_mode is False
+    assert "BUY_ORDER_STATUS_UNCERTAIN" not in runner.state.kill_switch_reasons
 
 
 def test_auto_runner_restores_position_and_blocks_duplicate_buy_after_restart():
@@ -196,7 +244,7 @@ def test_auto_runner_restores_pending_buy_order_and_blocks_duplicate_buy():
     domestic_account.get_open_orders.return_value = [{"pdno": "005930", "sll_buy_dvsn_cd": "02"}]
     domestic_account.get_today_executions.return_value = []
     domestic_account.get_daily_realized_pnl.return_value = 0
-    domestic_account.get_available_cash.return_value = 100000
+    domestic_account.get_available_buy_quantity.return_value = 1
 
     domestic_order = Mock()
     watchlist_manager = Mock()

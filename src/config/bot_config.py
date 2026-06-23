@@ -36,7 +36,7 @@ class StrategyConfig:
 
 @dataclass(frozen=True)
 class RiskConfig:
-    max_buy_amount_per_trade: int
+    enforce_daily_loss_limit: bool
     max_daily_loss: int
     max_daily_loss_percent: float
     max_daily_trade_count: int
@@ -50,6 +50,14 @@ class RiskConfig:
     stale_position_min_profit_percent: float
     unfilled_order_timeout_seconds: int
     reentry_cooldown_minutes: int
+
+
+@dataclass(frozen=True)
+class TradingCostConfig:
+    buy_fee_percent: float
+    sell_fee_percent: float
+    sell_tax_percent: float
+    slippage_percent: float
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,7 @@ class BotConfig:
     korea: KoreaMarketConfig
     strategy: StrategyConfig
     risk: RiskConfig
+    cost: TradingCostConfig
     watchlist: WatchlistConfig
 
 
@@ -94,6 +103,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
     korea = _get_dict(market, "korea")
     strategy = _get_dict(data, "strategy")
     risk = _get_dict(data, "risk")
+    cost = _get_dict(data, "cost")
     watchlist = data.get("watchlist", {})
     if not isinstance(watchlist, dict):
         raise ValueError("config.watchlist must be a mapping")
@@ -125,10 +135,7 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             vwap_entry_price_ratio=_get_positive_float_env("VWAP_ENTRY_PRICE_RATIO", 1.0),
         ),
         risk=RiskConfig(
-            max_buy_amount_per_trade=_get_positive_int_env(
-                "MAX_BUY_AMOUNT_PER_TRADE",
-                int(risk.get("max_buy_amount_per_trade", 100000)),
-            ),
+            enforce_daily_loss_limit=bool(risk.get("enforce_daily_loss_limit", True)),
             max_daily_loss=int(risk.get("max_daily_loss", 30000)),
             max_daily_loss_percent=float(risk.get("max_daily_loss_percent", -1.5)),
             max_daily_trade_count=int(risk.get("max_daily_trade_count", 5)),
@@ -142,6 +149,12 @@ def load_bot_config(path: str = "config.yaml") -> BotConfig:
             stale_position_min_profit_percent=float(risk.get("stale_position_min_profit_percent", 0.5)),
             unfilled_order_timeout_seconds=int(risk.get("unfilled_order_timeout_seconds", 30)),
             reentry_cooldown_minutes=int(risk.get("reentry_cooldown_minutes", 15)),
+        ),
+        cost=TradingCostConfig(
+            buy_fee_percent=float(cost.get("buy_fee_percent", 0.015)),
+            sell_fee_percent=float(cost.get("sell_fee_percent", 0.015)),
+            sell_tax_percent=float(cost.get("sell_tax_percent", 0.2)),
+            slippage_percent=float(cost.get("slippage_percent", 0.05)),
         ),
         watchlist=WatchlistConfig(
             kr=KrWatchlistConfig(
@@ -169,8 +182,6 @@ def validate_bot_config(bot_config: BotConfig) -> None:
     @param bot_config: Loaded bot config.
     @raises ValueError: If a setting can make live operation unsafe.
     """
-    if bot_config.risk.max_buy_amount_per_trade <= 0:
-        raise ValueError("risk.max_buy_amount_per_trade must be greater than 0")
     if bot_config.risk.max_position_count <= 0:
         raise ValueError("risk.max_position_count must be greater than 0")
     if bot_config.risk.max_daily_loss <= 0:
@@ -187,6 +198,14 @@ def validate_bot_config(bot_config: BotConfig) -> None:
         raise ValueError("risk.partial_take_profit_ratio must be greater than 0 and less than or equal to 1")
     if bot_config.risk.reentry_cooldown_minutes < 0:
         raise ValueError("risk.reentry_cooldown_minutes must be greater than or equal to 0")
+    if bot_config.cost.buy_fee_percent < 0:
+        raise ValueError("cost.buy_fee_percent must be greater than or equal to 0")
+    if bot_config.cost.sell_fee_percent < 0:
+        raise ValueError("cost.sell_fee_percent must be greater than or equal to 0")
+    if bot_config.cost.sell_tax_percent < 0:
+        raise ValueError("cost.sell_tax_percent must be greater than or equal to 0")
+    if bot_config.cost.slippage_percent < 0:
+        raise ValueError("cost.slippage_percent must be greater than or equal to 0")
     if bot_config.strategy.volume_multiplier <= 0:
         raise ValueError("strategy.volume_multiplier must be greater than 0")
     if bot_config.strategy.vwap_entry_price_ratio <= 0:
@@ -222,14 +241,6 @@ def _get_positive_float_env(name: str, default: float) -> float:
     return value
 
 
-def _get_positive_int_env(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value in (None, ""):
-        return default
-    parsed_value = int(value)
-    if parsed_value <= 0:
-        raise ValueError(f"{name} must be greater than 0")
-    return parsed_value
 
 
 def _create_entry_windows(items: Any) -> tuple[tuple[str, str], ...]:

@@ -22,6 +22,23 @@ class KisAccount:
             raise RuntimeError(f"KIS balance response missing output1 list: {response}")
         return output
 
+    def get_account_summary(self) -> Dict[str, Any]:
+        """Fetch domestic account-level asset summary.
+
+        @returns: KIS balance output2 summary row.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/trading/inquire-balance",
+            self._balance_tr_id(),
+            self._balance_params(),
+        )
+        output = response.get("output2")
+        if isinstance(output, list) and output and isinstance(output[0], dict):
+            return output[0]
+        if isinstance(output, dict):
+            return output
+        raise RuntimeError(f"KIS balance response missing output2 summary: {response}")
+
     def get_available_cash(self, symbol: str = "005930") -> int:
         """Fetch available cash for a market buy order.
 
@@ -47,6 +64,32 @@ class KisAccount:
             raise RuntimeError(f"KIS available cash response missing output: {response}")
         cash = output.get("ord_psbl_cash") or output.get("nrcvb_buy_amt") or "0"
         return int(str(cash).replace(",", ""))
+
+    def get_available_buy_quantity(self, symbol: str) -> int:
+        """Fetch the maximum market-buy quantity allowed by KIS.
+
+        @param symbol: Six-digit domestic stock code used for inquiry.
+        @returns: Maximum quantity that can currently be submitted as a market buy.
+        """
+        params = {
+            "CANO": self.client.settings.kis_account_no,
+            "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
+            "PDNO": symbol,
+            "ORD_UNPR": "0",
+            "ORD_DVSN": "01",
+            "CMA_EVLU_AMT_ICLD_YN": "Y",
+            "OVRS_ICLD_YN": "N",
+        }
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+            "VTTC8908R" if self.client.settings.kis_is_mock else "TTTC8908R",
+            params,
+        )
+        output = response.get("output")
+        if not isinstance(output, dict):
+            raise RuntimeError(f"KIS available quantity response missing output: {response}")
+        quantity = output.get("max_buy_qty") or output.get("nrcvb_buy_qty") or "0"
+        return int(str(quantity).replace(",", ""))
 
     def get_open_orders(self) -> List[Dict[str, Any]]:
         """Fetch domestic open orders.

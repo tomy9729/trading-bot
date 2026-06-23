@@ -84,5 +84,32 @@ def initialize_database(db_path: str | Path | None = None) -> None:
 
               raw_json TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS account_snapshots (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              recorded_at TEXT NOT NULL,
+              trade_date TEXT NOT NULL,
+
+              cash_balance REAL,
+              available_cash REAL,
+              stock_value REAL,
+              total_asset REAL,
+              unrealized_pnl REAL,
+              daily_realized_pnl REAL,
+              cumulative_cost REAL,
+
+              raw_json TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_account_snapshots_recorded_at
+            ON account_snapshots (recorded_at);
             """
         )
+        _ensure_column(connection, "executions", "gross_pnl", "REAL")
+        _ensure_column(connection, "executions", "total_cost", "REAL DEFAULT 0")
+
+
+def _ensure_column(connection, table: str, column: str, definition: str) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

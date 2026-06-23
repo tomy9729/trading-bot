@@ -44,7 +44,6 @@ KIS_IS_MOCK=false
 DRY_RUN=true
 FORCE_QUANTITY=
 MAX_ORDER_AMOUNT=100000
-MAX_BUY_AMOUNT_PER_TRADE=500000
 MAX_POSITION_COUNT=1
 DAILY_MAX_LOSS_RATE=-2.0
 DAILY_MAX_LOSS_AMOUNT=20000
@@ -57,7 +56,11 @@ KIS_RATE_LIMIT_MAX_ATTEMPTS=3
 
 전략, 리스크, 관심종목은 [config.yaml](config.yaml)에서 관리합니다.
 
-자동매매의 종목별 1회 최대 매수 금액은 `risk.max_buy_amount_per_trade`로 설정합니다. `.env`에 `MAX_BUY_AMOUNT_PER_TRADE`를 지정하면 `config.yaml` 값보다 우선합니다. 예를 들어 `500000`은 한 종목당 최대 50만 원 범위에서 현재가와 주문 가능 현금에 맞춰 정수 수량을 계산합니다. 변경한 환경변수는 봇을 재시작해야 적용됩니다.
+자동매매 주문 수량은 KIS 주문가능금액 조회 API가 반환하는 `max_buy_qty`를 사용합니다. 시장가 주문에 필요한 증거금과 실제 계좌 주문가능금액이 반영되므로 별도의 종목별 매수 금액 설정은 사용하지 않습니다.
+
+거래비용은 `config.yaml`의 `cost`에서 관리합니다. 매도 전략은 수수료, 매도세금, 예상 슬리피지를 차감한 순수익률을 사용하며, 체결 DB는 실제 체결가에 수수료와 세금만 반영합니다. `buy_fee_percent`와 `sell_fee_percent`는 실제 계좌 수수료율에 맞춰 조정해야 합니다.
+
+계좌 총자산은 장중 5분 간격과 주문 직후 `account_snapshots` 테이블 및 `account_snapshot` JSONL 이벤트로 저장합니다. 예수금, 주문가능금액, 주식평가금액, 총평가자산, 평가손익, 당일 실현손익, 누적 거래비용이 포함됩니다.
 
 ## 실행 방법
 

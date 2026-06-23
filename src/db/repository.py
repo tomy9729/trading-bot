@@ -52,7 +52,7 @@ class TradingRepository:
         @returns: Inserted row id, or None when DB save failed.
         """
         saved_at = created_at or datetime.now()
-        return self._execute_insert(
+        inserted_id = self._execute_insert(
             """
             INSERT INTO orders (
               created_at,
@@ -88,6 +88,7 @@ class TradingRepository:
             ),
             "insert_order",
         )
+        return inserted_id
 
     def update_order_status(
         self,
@@ -146,6 +147,8 @@ class TradingRepository:
         symbol_name: str | None = None,
         fee: float = 0,
         tax: float = 0,
+        gross_pnl: float | None = None,
+        total_cost: float = 0,
         realized_pnl: float | None = None,
         realized_pnl_rate: float | None = None,
         strategy_name: str | None = None,
@@ -162,6 +165,8 @@ class TradingRepository:
         @param symbol_name: Optional stock name.
         @param fee: Execution fee.
         @param tax: Execution tax.
+        @param gross_pnl: Gross realized profit/loss before costs.
+        @param total_cost: Total buy/sell fees and sell tax.
         @param realized_pnl: Realized profit/loss.
         @param realized_pnl_rate: Realized profit/loss rate.
         @param strategy_name: Optional strategy name.
@@ -170,7 +175,7 @@ class TradingRepository:
         @returns: Inserted row id, or None when ignored or failed.
         """
         saved_at = created_at or datetime.now()
-        return self._execute_insert(
+        inserted_id = self._execute_insert(
             """
             INSERT OR IGNORE INTO executions (
               created_at,
@@ -183,12 +188,14 @@ class TradingRepository:
               price,
               fee,
               tax,
+              gross_pnl,
+              total_cost,
               realized_pnl,
               realized_pnl_rate,
               strategy_name,
               raw_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _datetime_text(saved_at),
@@ -201,6 +208,8 @@ class TradingRepository:
                 price,
                 fee,
                 tax,
+                gross_pnl,
+                total_cost,
                 realized_pnl,
                 realized_pnl_rate,
                 strategy_name,
@@ -208,6 +217,176 @@ class TradingRepository:
             ),
             "insert_execution",
         )
+        self.update_execution_financials(
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            fee=fee,
+            tax=tax,
+            gross_pnl=gross_pnl,
+            total_cost=total_cost,
+            realized_pnl=realized_pnl,
+            realized_pnl_rate=realized_pnl_rate,
+        )
+        return inserted_id
+
+    def update_execution_financials(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        fee: float,
+        tax: float,
+        gross_pnl: float | None,
+        total_cost: float,
+        realized_pnl: float | None,
+        realized_pnl_rate: float | None,
+        order_id: str | None = None,
+    ) -> bool:
+        """Update cost and realized profit fields for one execution.
+
+        @param symbol: Six-digit domestic stock code.
+        @param side: BUY or SELL.
+        @param quantity: Executed quantity.
+        @param price: Executed price.
+        @param fee: Execution fee.
+        @param tax: Execution tax.
+        @param gross_pnl: Gross realized profit/loss before costs.
+        @param total_cost: Total allocated transaction costs.
+        @param realized_pnl: Net realized profit/loss.
+        @param realized_pnl_rate: Net realized return rate.
+        @param order_id: Broker order id when available.
+        @returns: True when the update statement ran successfully.
+        """
+        if order_id:
+            where_sql = "order_id = ?"
+            where_params = (order_id,)
+        else:
+            where_sql = "symbol = ? AND side = ? AND quantity = ? AND price = ?"
+            where_params = (symbol, side, quantity, price)
+        return self._execute(
+            f"""
+            UPDATE executions
+            SET fee = ?,
+                tax = ?,
+                gross_pnl = ?,
+                total_cost = ?,
+                realized_pnl = ?,
+                realized_pnl_rate = ?
+            WHERE {where_sql}
+            """,
+            (
+                fee,
+                tax,
+                gross_pnl,
+                total_cost,
+                realized_pnl,
+                realized_pnl_rate,
+                *where_params,
+            ),
+            "update_execution_financials",
+        )
+
+    def get_executions(self, trade_date: str) -> list[dict[str, Any]]:
+        """Return executions saved for one trade date.
+
+        @param trade_date: Date in YYYY-MM-DD format.
+        @returns: Execution rows ordered by creation time.
+        """
+        try:
+            with get_connection(self.db_path) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT * FROM executions WHERE trade_date = ? ORDER BY created_at, id",
+                    (trade_date,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error:
+            self.logger.exception("[DB READ FAILED] operation=get_executions")
+            return []
+
+    def insert_account_snapshot(
+        self,
+        *,
+        cash_balance: float | None,
+        available_cash: float | None,
+        stock_value: float | None,
+        total_asset: float | None,
+        unrealized_pnl: float | None,
+        daily_realized_pnl: float | None,
+        cumulative_cost: float | None,
+        raw_json: Any = None,
+        recorded_at: datetime | None = None,
+    ) -> int | None:
+        """Insert one account asset snapshot.
+
+        @param cash_balance: Account deposit/cash balance.
+        @param available_cash: Current market-buy available cash.
+        @param stock_value: Current stock evaluation amount.
+        @param total_asset: Current total evaluated asset.
+        @param unrealized_pnl: Current unrealized profit/loss.
+        @param daily_realized_pnl: Today's net realized profit/loss.
+        @param cumulative_cost: Today's cumulative fees and taxes.
+        @param raw_json: Raw KIS account summary.
+        @param recorded_at: Optional snapshot timestamp.
+        @returns: Inserted row id, or None when DB save failed.
+        """
+        saved_at = recorded_at or datetime.now()
+        return self._execute_insert(
+            """
+            INSERT INTO account_snapshots (
+              recorded_at,
+              trade_date,
+              cash_balance,
+              available_cash,
+              stock_value,
+              total_asset,
+              unrealized_pnl,
+              daily_realized_pnl,
+              cumulative_cost,
+              raw_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _datetime_text(saved_at),
+                _trade_date_text(saved_at),
+                cash_balance,
+                available_cash,
+                stock_value,
+                total_asset,
+                unrealized_pnl,
+                daily_realized_pnl,
+                cumulative_cost,
+                _json_text(raw_json),
+            ),
+            "insert_account_snapshot",
+        )
+
+    def get_cumulative_execution_cost(self, trade_date: str) -> float:
+        """Return cumulative execution fees and taxes for one date.
+
+        @param trade_date: Date in YYYY-MM-DD format.
+        @returns: Sum of execution fees and taxes.
+        """
+        try:
+            with get_connection(self.db_path) as connection:
+                value = connection.execute(
+                    """
+                    SELECT COALESCE(SUM(COALESCE(fee, 0) + COALESCE(tax, 0)), 0)
+                    FROM executions
+                    WHERE trade_date = ?
+                    """,
+                    (trade_date,),
+                ).fetchone()[0]
+            return float(value or 0)
+        except sqlite3.Error:
+            self.logger.exception("[DB READ FAILED] operation=get_cumulative_execution_cost")
+            return 0.0
 
     def upsert_position(
         self,

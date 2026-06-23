@@ -5,14 +5,16 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict
 
 from src.broker.kis_account import KisAccount
+from src.broker.kis_client import KisApiError
 from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
-from src.config.bot_config import BotConfig
+from src.config.bot_config import BotConfig, TradingCostConfig
 from src.config.env import Settings
 from src.db.repository import TradingRepository
 from src.domain.position import Position, PositionState
 from src.logs.trade_logger import get_trade_logger, write_trade_event
 from src.risk.risk_manager import RiskManager, RiskState
+from src.risk.trading_cost import calculate_trade_cost_result
 from src.runner.dry_run_runner import calculate_order_quantity
 from src.runner.market_hours import MarketHours
 from src.strategy.advanced_signals import EntrySignal, ExitSignal, MarketFilter, SymbolFilter
@@ -64,7 +66,11 @@ class AutoTradingRunner:
         self.watchlist_manager = watchlist_manager
         self.trade_repository = trade_repository
         self.snapshot_builder = MarketSnapshotBuilder(bot_config.strategy)
-        self.risk_manager = RiskManager(self.settings, bot_config.risk.max_daily_trade_count)
+        self.risk_manager = RiskManager(
+            self.settings,
+            bot_config.risk.max_daily_trade_count,
+            bot_config.risk.enforce_daily_loss_limit,
+        )
         market_filter = MarketFilter(bot_config)
         symbol_filter = SymbolFilter(bot_config)
         self.entry_signal = EntrySignal(bot_config, market_filter, symbol_filter)
@@ -73,6 +79,7 @@ class AutoTradingRunner:
         self.logger = get_trade_logger()
         self.run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.cycle_id = 0
+        self.last_account_snapshot_at: datetime | None = None
 
     def run_forever(self, interval_seconds: int) -> None:
         """Run the automatic trading loop until the process is stopped.
@@ -100,6 +107,7 @@ class AutoTradingRunner:
         if not self._sync_domestic_positions():
             return
         self._sync_domestic_executions()
+        self._save_account_snapshot()
         try:
             self._call_with_retries(lambda: self.watchlist_manager.refresh("KR"), "watchlist_refresh", "KR")
         except Exception:
@@ -152,16 +160,27 @@ class AutoTradingRunner:
             self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NEW_BUY_TIME_BLOCKED", symbol, name)
             self._write_skip_event("KR", symbol, name, "NEW_BUY_TIME_BLOCKED", snapshot=snapshot)
             return
-        available_cash = self._call_with_retries(lambda: self.domestic_account.get_available_cash(symbol), "available_cash", symbol)
-        quantity = calculate_order_quantity(
-            snapshot.current_price,
-            available_cash,
-            self.bot_config.risk.max_buy_amount_per_trade,
-            self.settings.force_quantity,
+        available_buy_quantity = self._call_with_retries(
+            lambda: self.domestic_account.get_available_buy_quantity(symbol),
+            "available_buy_quantity",
+            symbol,
         )
+        quantity = calculate_order_quantity(available_buy_quantity, self.settings.force_quantity)
         if quantity < 1:
-            self.logger.info("[BUY SKIP] market=domestic symbol=%s name=%r reason=NO_ORDER_QUANTITY available_cash=%s", symbol, name, available_cash)
-            self._write_skip_event("KR", symbol, name, "NO_ORDER_QUANTITY", {"available_cash": available_cash}, snapshot)
+            self.logger.info(
+                "[BUY SKIP] market=domestic symbol=%s name=%r reason=NO_ORDER_QUANTITY available_buy_quantity=%s",
+                symbol,
+                name,
+                available_buy_quantity,
+            )
+            self._write_skip_event(
+                "KR",
+                symbol,
+                name,
+                "NO_ORDER_QUANTITY",
+                {"available_buy_quantity": available_buy_quantity},
+                snapshot,
+            )
             return
         self._place_domestic_buy(symbol, quantity, snapshot.current_price)
 
@@ -217,10 +236,14 @@ class AutoTradingRunner:
                     "dry_run": self.settings.dry_run,
                 },
             )
+            self._save_account_snapshot(force=True)
         except Exception as exc:
-            self.logger.exception("[BUY ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, quantity)
-            if not self._reconcile_uncertain_order(symbol, "BUY", exc):
-                self._activate_safe_mode("BUY_ORDER_STATUS_UNCERTAIN")
+            if isinstance(exc, KisApiError) and exc.is_definitive_rejection:
+                self.logger.warning("[BUY ORDER REJECTED] market=KR symbol=%s quantity=%s error=%s", symbol, quantity, exc)
+            else:
+                self.logger.exception("[BUY ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, quantity)
+                if not self._reconcile_uncertain_order(symbol, "BUY", exc):
+                    self._activate_safe_mode("BUY_ORDER_STATUS_UNCERTAIN")
         finally:
             self.state.pending_order_symbols.discard(symbol)
             self.state.order_locked_symbols.discard(symbol)
@@ -255,10 +278,14 @@ class AutoTradingRunner:
                     "dry_run": self.settings.dry_run,
                 },
             )
+            self._save_account_snapshot(force=True)
         except Exception as exc:
-            self.logger.exception("[SELL ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, sell_quantity)
-            if not self._reconcile_uncertain_order(symbol, "SELL", exc):
-                self._activate_safe_mode("SELL_ORDER_STATUS_UNCERTAIN")
+            if isinstance(exc, KisApiError) and exc.is_definitive_rejection:
+                self.logger.warning("[SELL ORDER REJECTED] market=KR symbol=%s quantity=%s error=%s", symbol, sell_quantity, exc)
+            else:
+                self.logger.exception("[SELL ORDER UNCERTAIN] market=KR symbol=%s quantity=%s", symbol, sell_quantity)
+                if not self._reconcile_uncertain_order(symbol, "SELL", exc):
+                    self._activate_safe_mode("SELL_ORDER_STATUS_UNCERTAIN")
         finally:
             self.state.pending_order_symbols.discard(symbol)
             self.state.order_locked_symbols.discard(symbol)
@@ -312,9 +339,12 @@ class AutoTradingRunner:
             executions = self._call_with_retries(self.domestic_account.get_today_executions, "startup_today_executions", "KR")
             self._restore_daily_execution_state(executions)
             self._persist_execution_rows(executions)
-            self.state.daily_realized_pnl = self._call_with_retries(self.domestic_account.get_daily_realized_pnl, "startup_daily_pnl", "KR")
+            self.state.daily_realized_pnl = _calculate_daily_net_realized_pnl(executions, self.bot_config.cost)
             self.state.daily_loss_amount = abs(min(0, self.state.daily_realized_pnl))
-            if self.state.daily_loss_amount >= self.settings.daily_max_loss_amount:
+            if (
+                self.bot_config.risk.enforce_daily_loss_limit
+                and self.state.daily_loss_amount >= self.settings.daily_max_loss_amount
+            ):
                 self._activate_kill_switch("DAILY_MAX_LOSS_AMOUNT_REACHED")
             self.state.startup_recovered = True
             write_trade_event(
@@ -383,7 +413,7 @@ class AutoTradingRunner:
     def _persist_execution_rows(self, rows: list[dict[str, Any]]) -> None:
         if self.trade_repository is None:
             return
-        for row in rows:
+        for row, financials in _create_execution_financial_rows(rows, self.bot_config.cost):
             symbol = _row_symbol(row)
             side = _row_order_side(row)
             quantity = _row_execution_quantity(row)
@@ -397,10 +427,12 @@ class AutoTradingRunner:
                 side=side,
                 quantity=quantity,
                 price=price,
-                fee=_row_float(row, ("fee", "ord_fee", "fee_amt", "cmsn_amt")),
-                tax=_row_float(row, ("tax", "tax_amt")),
-                realized_pnl=_row_float(row, ("rlzt_pfls", "realized_pnl", "trad_pfls")),
-                realized_pnl_rate=_row_float(row, ("rlzt_pfls_rt", "realized_pnl_rate", "trad_pfls_rt")),
+                fee=financials["fee"],
+                tax=financials["tax"],
+                gross_pnl=financials["gross_pnl"],
+                total_cost=financials["total_cost"],
+                realized_pnl=financials["realized_pnl"],
+                realized_pnl_rate=financials["realized_pnl_rate"],
                 strategy_name=self.bot_config.strategy.name,
                 raw_json=row,
                 created_at=_row_created_at(row),
@@ -425,6 +457,56 @@ class AutoTradingRunner:
                 strategy_name=self.bot_config.strategy.name if symbol in self.state.positions else None,
                 raw_json=row,
             )
+
+    def _save_account_snapshot(self, force: bool = False) -> None:
+        now = datetime.now()
+        if not force and self.last_account_snapshot_at is not None:
+            if now - self.last_account_snapshot_at < timedelta(minutes=5):
+                return
+        try:
+            summary = self.domestic_account.get_account_summary()
+            available_cash = self.domestic_account.get_available_cash()
+            snapshot = {
+                "cash_balance": _row_float(summary, ("dnca_tot_amt", "cash_balance")),
+                "available_cash": float(available_cash),
+                "stock_value": _row_float(summary, ("scts_evlu_amt", "stock_value")),
+                "total_asset": _row_float(summary, ("tot_evlu_amt", "nass_amt", "total_asset")),
+                "unrealized_pnl": _row_float(summary, ("evlu_pfls_smtl_amt", "unrealized_pnl")),
+                "daily_realized_pnl": float(self.state.daily_realized_pnl),
+                "cumulative_cost": (
+                    self.trade_repository.get_cumulative_execution_cost(now.strftime("%Y-%m-%d"))
+                    if self.trade_repository is not None
+                    else 0.0
+                ),
+            }
+        except Exception:
+            self.logger.exception("[ACCOUNT SNAPSHOT FAILED]")
+            return
+
+        if self.trade_repository is not None:
+            self.trade_repository.insert_account_snapshot(
+                **snapshot,
+                raw_json=summary,
+                recorded_at=now,
+            )
+        self.last_account_snapshot_at = now
+        self.logger.info(
+            "[ACCOUNT SNAPSHOT] total_asset=%s cash_balance=%s available_cash=%s stock_value=%s unrealized_pnl=%s daily_realized_pnl=%s cumulative_cost=%s",
+            snapshot["total_asset"],
+            snapshot["cash_balance"],
+            snapshot["available_cash"],
+            snapshot["stock_value"],
+            snapshot["unrealized_pnl"],
+            snapshot["daily_realized_pnl"],
+            snapshot["cumulative_cost"],
+        )
+        write_trade_event(
+            "account_snapshot",
+            {
+                **self._event_context("KR"),
+                **snapshot,
+            },
+        )
 
     def _reconcile_uncertain_order(self, symbol: str, side: str, exc: Exception) -> bool:
         try:
@@ -574,6 +656,10 @@ class AutoTradingRunner:
             "market_down_block_threshold_percent": strategy.market_down_block_threshold_percent,
             "take_profit_percent": risk.take_profit_percent,
             "second_take_profit_percent": risk.second_take_profit_percent,
+            "buy_fee_percent": self.bot_config.cost.buy_fee_percent,
+            "sell_fee_percent": self.bot_config.cost.sell_fee_percent,
+            "sell_tax_percent": self.bot_config.cost.sell_tax_percent,
+            "slippage_percent": self.bot_config.cost.slippage_percent,
             "stop_loss_percent": risk.stop_loss_percent,
             "stale_position_minutes": risk.stale_position_minutes,
             "stale_position_min_profit_percent": risk.stale_position_min_profit_percent,
@@ -619,6 +705,7 @@ class AutoTradingRunner:
             "daily_realized_pnl": self.state.daily_realized_pnl,
             "daily_loss_limit": self.settings.daily_max_loss_amount,
             "daily_loss_rate_limit": self.settings.daily_max_loss_rate,
+            "daily_loss_limit_enabled": self.bot_config.risk.enforce_daily_loss_limit,
             "daily_loss_amount": self.state.daily_loss_amount,
             "consecutive_losses": self.state.consecutive_loss_count,
             "max_positions": self.settings.max_position_count,
@@ -747,6 +834,122 @@ def _row_execution_quantity(row: dict[str, Any]) -> int:
 
 def _row_execution_price(row: dict[str, Any]) -> float | None:
     return _row_float(row, ("avg_prvs", "ccld_unpr", "ord_unpr", "price"))
+
+
+def _create_execution_financial_rows(
+    rows: list[dict[str, Any]],
+    cost_config: TradingCostConfig,
+) -> list[tuple[dict[str, Any], dict[str, float | None]]]:
+    ordered_rows = sorted(rows, key=_row_created_at)
+    buy_lots: dict[str, list[list[float]]] = {}
+    results = []
+
+    for row in ordered_rows:
+        symbol = _row_symbol(row)
+        side = _row_order_side(row)
+        quantity = _row_execution_quantity(row)
+        price = _row_execution_price(row)
+        if not symbol or side is None or quantity < 1 or price is None:
+            results.append((row, _empty_execution_financials()))
+            continue
+
+        amount = price * quantity
+        execution_fee_percent = cost_config.buy_fee_percent if side == "BUY" else cost_config.sell_fee_percent
+        execution_fee = amount * (execution_fee_percent / 100)
+        execution_tax = amount * (cost_config.sell_tax_percent / 100) if side == "SELL" else 0.0
+
+        if side == "BUY":
+            buy_lots.setdefault(symbol, []).append([float(quantity), float(price)])
+            results.append(
+                (
+                    row,
+                    {
+                        "fee": execution_fee,
+                        "tax": 0.0,
+                        "gross_pnl": None,
+                        "total_cost": execution_fee,
+                        "realized_pnl": None,
+                        "realized_pnl_rate": None,
+                    },
+                )
+            )
+            continue
+
+        remaining_quantity = float(quantity)
+        matched_quantity = 0.0
+        matched_buy_amount = 0.0
+        lots = buy_lots.setdefault(symbol, [])
+        while remaining_quantity > 0 and lots:
+            lot_quantity, lot_price = lots[0]
+            used_quantity = min(remaining_quantity, lot_quantity)
+            matched_quantity += used_quantity
+            matched_buy_amount += used_quantity * lot_price
+            remaining_quantity -= used_quantity
+            lot_quantity -= used_quantity
+            if lot_quantity <= 0:
+                lots.pop(0)
+            else:
+                lots[0][0] = lot_quantity
+
+        if matched_quantity <= 0 or remaining_quantity > 0:
+            results.append(
+                (
+                    row,
+                    {
+                        "fee": execution_fee,
+                        "tax": execution_tax,
+                        "gross_pnl": None,
+                        "total_cost": execution_fee + execution_tax,
+                        "realized_pnl": None,
+                        "realized_pnl_rate": None,
+                    },
+                )
+            )
+            continue
+
+        average_buy_price = matched_buy_amount / matched_quantity
+        trade_result = calculate_trade_cost_result(
+            average_buy_price,
+            price,
+            matched_quantity,
+            buy_fee_percent=cost_config.buy_fee_percent,
+            sell_fee_percent=cost_config.sell_fee_percent,
+            sell_tax_percent=cost_config.sell_tax_percent,
+        )
+        results.append(
+            (
+                row,
+                {
+                    "fee": trade_result.sell_fee,
+                    "tax": trade_result.sell_tax,
+                    "gross_pnl": trade_result.gross_profit_loss,
+                    "total_cost": trade_result.total_cost,
+                    "realized_pnl": trade_result.net_profit_loss,
+                    "realized_pnl_rate": trade_result.net_return_rate,
+                },
+            )
+        )
+
+    return results
+
+
+def _calculate_daily_net_realized_pnl(rows: list[dict[str, Any]], cost_config: TradingCostConfig) -> int:
+    total = sum(
+        float(financials["realized_pnl"] or 0)
+        for _, financials in _create_execution_financial_rows(rows, cost_config)
+    )
+    return int(round(total))
+
+
+def _empty_execution_financials() -> dict[str, float | None]:
+    return {
+        "fee": 0.0,
+        "tax": 0.0,
+        "gross_pnl": None,
+        "total_cost": 0.0,
+        "realized_pnl": None,
+        "realized_pnl_rate": None,
+    }
 
 
 def _row_float(row: dict[str, Any], keys: tuple[str, ...]) -> float | None:

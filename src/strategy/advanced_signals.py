@@ -5,6 +5,7 @@ from typing import Any
 from src.config.bot_config import BotConfig
 from src.domain.market_data import MarketSnapshot
 from src.domain.position import Position, PositionState
+from src.risk.trading_cost import calculate_trade_cost_result
 from src.domain.signal import Signal
 from src.risk.risk_manager import RiskManager, RiskState
 from src.strategy.indicators import calculate_volume_multiplier
@@ -198,8 +199,18 @@ class ExitSignal:
         @returns: Sell, partial sell, or hold signal.
         """
         current_time = now or datetime.now()
-        profit_rate = ((snapshot.current_price - position.average_price) / position.average_price) * 100
-        profit_amount = (snapshot.current_price - position.average_price) * position.quantity
+        cost = self.bot_config.cost
+        trade_result = calculate_trade_cost_result(
+            position.average_price,
+            snapshot.current_price,
+            position.quantity,
+            buy_fee_percent=cost.buy_fee_percent,
+            sell_fee_percent=cost.sell_fee_percent,
+            sell_tax_percent=cost.sell_tax_percent,
+            sell_slippage_percent=cost.slippage_percent,
+        )
+        profit_rate = trade_result.net_return_rate
+        profit_amount = trade_result.net_profit_loss
         hold_minutes = (current_time - position.entry_time).total_seconds() / 60
         details = _entry_details(snapshot)
         details.update(
@@ -209,6 +220,15 @@ class ExitSignal:
                 "position_quantity": position.quantity,
                 "profit_rate": profit_rate,
                 "profit_amount": profit_amount,
+                "gross_profit_rate": trade_result.gross_return_rate,
+                "gross_profit_amount": trade_result.gross_profit_loss,
+                "net_profit_rate": trade_result.net_return_rate,
+                "net_profit_amount": trade_result.net_profit_loss,
+                "estimated_buy_fee": trade_result.buy_fee,
+                "estimated_sell_fee": trade_result.sell_fee,
+                "estimated_sell_tax": trade_result.sell_tax,
+                "estimated_slippage_cost": trade_result.slippage_cost,
+                "estimated_total_cost": trade_result.total_cost,
                 "hold_minutes": hold_minutes,
                 "stop_loss_price": position.average_price * (1 + (self.bot_config.risk.stop_loss_percent / 100)),
                 "take_profit_price": position.average_price * (1 + (self.bot_config.risk.take_profit_percent / 100)),
@@ -249,7 +269,7 @@ class ExitSignal:
             matched_conditions,
             failed_conditions,
             "VOLUME_DROPPED_AFTER_BREAKOUT",
-            snapshot.volume_declining,
+            snapshot.volume_declining and trade_result.net_profit_loss > 0,
             first_exit_reason,
         )
         first_exit_reason = _append_exit_condition_result(

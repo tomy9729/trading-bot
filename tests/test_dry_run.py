@@ -29,12 +29,16 @@ def test_live_mode_can_call_order_api():
 
 
 def test_force_quantity_one_orders_one_share():
-    assert calculate_order_quantity(50000, 100000, 100000, 1) == 1
+    assert calculate_order_quantity(2, 1) == 1
 
 
-def test_insufficient_cash_blocks_order():
-    assert calculate_order_quantity(50000, 49999, 100000, None) == 0
+def test_force_quantity_above_available_quantity_blocks_order():
+    assert calculate_order_quantity(1, 2) == 0
 
 
 def test_zero_quantity_blocks_order():
-    assert calculate_order_quantity(50000, 0, 100000, None) == 0
+    assert calculate_order_quantity(0, None) == 0
+
+
+def test_available_quantity_is_used_without_separate_amount_limit():
+    assert calculate_order_quantity(3, None) == 3

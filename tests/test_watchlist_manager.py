@@ -6,6 +6,7 @@ from src.config.bot_config import (
     KrWatchlistConfig,
     RiskConfig,
     StrategyConfig,
+    TradingCostConfig,
     WatchlistConfig,
 )
 from src.watchlist.watchlist_manager import WatchlistManager
@@ -16,7 +17,7 @@ def _bot_config() -> BotConfig:
         korea=KoreaMarketConfig(True, "09:00", "15:30", 10, 10, (("09:10", "11:00"),), ("005930",)),
         strategy=StrategyConfig("test", 2.0, 5, 5, 2, 15.0, -2.0, 55.0, 0.3, 60.0, -0.5),
         risk=RiskConfig(
-            max_buy_amount_per_trade=100000,
+            enforce_daily_loss_limit=True,
             max_daily_loss=5000,
             max_daily_loss_percent=-1.5,
             max_daily_trade_count=5,
@@ -31,6 +32,7 @@ def _bot_config() -> BotConfig:
             unfilled_order_timeout_seconds=30,
             reentry_cooldown_minutes=15,
         ),
+        cost=TradingCostConfig(0.015, 0.015, 0.2, 0.05),
         watchlist=WatchlistConfig(
             kr=KrWatchlistConfig(True, "dynamic", 50, 180, 10, True, True, True, 1000, 0.3, 10000000),
         ),

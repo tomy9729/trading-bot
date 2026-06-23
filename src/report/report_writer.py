@@ -99,7 +99,7 @@ def _trade_records_table(analysis: ReportAnalysis) -> str:
     rows = ["| 시간 | 종목 코드 | 종목명 | 구분 | 가격 | 수량 | 금액 | 수익률 | 손익 | 사유 |", "|---|---|---|---|---:|---:|---:|---:|---:|---|"]
     for record in analysis.trade_records:
         rows.append(
-            f"| {record.time} | {record.symbol} | {record.name} | {record.side} | {_format_number(record.price)} | {_format_number(record.quantity)} | {_format_money(record.amount)} | {_format_percent(record.return_rate)} | {_format_money(record.profit_loss)} | {record.reason} |"
+            f"| {record.time} | {record.symbol} | {record.name} | {record.side} | {_format_number(record.price)} | {_format_number(record.quantity)} | {_format_money(record.amount)} | {_format_money(record.total_cost)} | {_format_percent(record.return_rate)} | {_format_money(record.profit_loss)} | {record.reason} |"
         )
     return "\n".join(rows)
 
@@ -110,7 +110,7 @@ def _closed_trades_table(analysis: ReportAnalysis) -> str:
     rows = ["| 종목 코드 | 종목명 | 매수 시간 | 매수 가격 | 매도 시간 | 매도 가격 | 보유 시간 | 수익률 | 실현 손익 | 매수 사유 | 매도 사유 |", "|---|---|---|---:|---|---:|---:|---:|---:|---|---|"]
     for trade in analysis.closed_trades:
         rows.append(
-            f"| {trade.symbol} | {trade.name} | {trade.buy_time} | {_format_number(trade.buy_price)} | {trade.sell_time} | {_format_number(trade.sell_price)} | {_format_minutes(trade.hold_minutes)} | {_format_percent(trade.return_rate)} | {_format_money(trade.profit_loss)} | {trade.buy_reason} | {trade.sell_reason} |"
+            f"| {trade.symbol} | {trade.name} | {trade.buy_time} | {_format_number(trade.buy_price)} | {trade.sell_time} | {_format_number(trade.sell_price)} | {_format_minutes(trade.hold_minutes)} | {_format_money(trade.gross_profit_loss)} | {_format_money(trade.total_cost)} | {_format_percent(trade.return_rate)} | {_format_money(trade.profit_loss)} | {trade.buy_reason} | {trade.sell_reason} |"
         )
     return "\n".join(rows)
 

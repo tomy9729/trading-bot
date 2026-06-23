@@ -21,9 +21,15 @@ class RiskState:
 
 
 class RiskManager:
-    def __init__(self, settings: Settings, max_daily_entry_per_symbol: int | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        max_daily_entry_per_symbol: int | None = None,
+        enforce_daily_loss_limit: bool = True,
+    ):
         self.settings = settings
         self.max_daily_entry_per_symbol = max_daily_entry_per_symbol or strategy_config.MAX_DAILY_ENTRY_PER_SYMBOL
+        self.enforce_daily_loss_limit = enforce_daily_loss_limit
 
     def can_enter(self, symbol: str, state: RiskState) -> tuple[bool, str]:
         """Check whether a new position can be opened.
@@ -44,10 +50,11 @@ class RiskManager:
             return False, "ALREADY_HELD_SYMBOL"
         if state.current_position_count >= self.settings.max_position_count:
             return False, "MAX_POSITION_COUNT_REACHED"
-        if state.daily_loss_rate <= self.settings.daily_max_loss_rate:
-            return False, "DAILY_MAX_LOSS_RATE_REACHED"
-        if state.daily_loss_amount >= self.settings.daily_max_loss_amount:
-            return False, "DAILY_MAX_LOSS_AMOUNT_REACHED"
+        if self.enforce_daily_loss_limit:
+            if state.daily_loss_rate <= self.settings.daily_max_loss_rate:
+                return False, "DAILY_MAX_LOSS_RATE_REACHED"
+            if state.daily_loss_amount >= self.settings.daily_max_loss_amount:
+                return False, "DAILY_MAX_LOSS_AMOUNT_REACHED"
         if state.consecutive_loss_count >= strategy_config.MAX_CONSECUTIVE_LOSS_COUNT:
             return False, "MAX_CONSECUTIVE_LOSS_COUNT_REACHED"
         entry_count = state.daily_entry_count_by_symbol.get(symbol, 0)

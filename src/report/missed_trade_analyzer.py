@@ -62,7 +62,7 @@ def analyze_missed_candidates(events: list[ReportEvent], bot_config: BotConfig) 
             if later_event.timestamp > event.timestamp and str(_details(later_event).get("symbol") or later_event.data.get("symbol") or "") == symbol
         ]
         later_prices = [value for value in later_prices if value is not None]
-        quantity = _calculate_virtual_quantity(price, bot_config.risk.max_buy_amount_per_trade)
+        quantity = 1
         simulation = calculate_simulated_trade(
             price,
             min(later_prices) if later_prices else None,
@@ -175,12 +175,6 @@ def _event_name(event: ReportEvent) -> str:
     if value not in (None, "", "None"):
         return str(value)
     return "분석 불가"
-
-
-def _calculate_virtual_quantity(price: float | None, max_amount: int) -> int:
-    if price is None or price <= 0:
-        return 0
-    return max(1, int(max_amount // price))
 
 
 def _candidate_sort_key(candidate: MissedTradeCandidate) -> tuple[float, float]:

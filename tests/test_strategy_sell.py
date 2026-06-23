@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 from src.domain.market_data import MarketSnapshot
 from src.domain.position import Position
+from src.config.bot_config import load_bot_config
+from src.strategy.advanced_signals import ExitSignal
 from src.strategy.vwap_volume_breakout import should_sell
 
 
@@ -54,3 +56,39 @@ def test_force_exit_signal():
     now = datetime(2026, 1, 1, 15, 15)
     signal = should_sell(_position(now), _market(current_price=1001), now)
     assert signal.reason == "FORCE_EXIT"
+
+
+def test_volume_decline_does_not_exit_when_estimated_net_profit_is_negative():
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(load_bot_config()).evaluate(
+        _position(now),
+        _market(
+            current_price=1001,
+            vwap=999,
+            volume_declining=True,
+            market_direction_rate=0.0,
+        ),
+        now,
+    )
+
+    assert signal.allowed is False
+    assert signal.reason == "EXIT_CONDITION_NOT_MET"
+    assert signal.details["gross_profit_rate"] == 0.1
+    assert signal.details["net_profit_rate"] < 0
+
+
+def test_volume_decline_exits_when_estimated_net_profit_is_positive():
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(load_bot_config()).evaluate(
+        _position(now),
+        _market(
+            current_price=1005,
+            vwap=999,
+            volume_declining=True,
+            market_direction_rate=0.0,
+        ),
+        now,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "VOLUME_DROPPED_AFTER_BREAKOUT"
