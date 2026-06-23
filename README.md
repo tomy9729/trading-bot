@@ -2,6 +2,14 @@
 
 한국투자증권 Open API 기반 Python 자동매매 봇입니다. 현재 버전은 국내장(KRX) 실전 자동매매를 대상으로 하며, 별도 웹 대시보드는 없습니다. 주문, 체결, 잔고 결과는 증권사 앱과 로컬 로그/리포트로 확인하는 구조입니다.
 
+## 프로젝트 방향
+
+현재 이 프로젝트는 한국투자증권 Open API를 이용하는 국내장 전용 자동매매 봇으로 개발 중입니다. 실전 운용 안정성을 우선하며, 매매 상태와 이벤트를 로그 및 SQLite DB에 저장합니다.
+
+다음 단계에서는 현재 보유 종목과 오늘 매매 이벤트를 확인할 수 있는 Vue 기반 웹 대시보드를 준비합니다. 미국장, AI·뉴스 분석, 리플레이, 전략 자동 튜닝은 국내장 운용 안정화 이후 검토합니다.
+
+세부 개발 단계와 현재 우선순위는 [Trading Bot Roadmap](docs/Roadmap.md)에서 관리합니다.
+
 ## 현재 지원 기능
 
 - 국내장(KRX) 시세 조회
@@ -12,6 +20,7 @@
 - 손절, 익절, VWAP 이탈, 장 마감 전 강제 청산 조건 평가
 - 일일 손실 제한, 일일 거래 횟수 제한, 동시 보유 종목 수 제한
 - 거래 로그 기록
+- 주문, 체결, 현재 포지션, 계좌 스냅샷, 봇 이벤트 SQLite 저장
 - 일일 매매 리포트 생성
 
 ## 지원 시장
@@ -75,6 +84,14 @@ python main.py --mode dry-run --symbol 005930
 ```bash
 python main.py --mode monitor --interval-seconds 60
 ```
+
+대시보드 read-only API 실행:
+
+```bash
+uvicorn apps.api.app:app --host 127.0.0.1 --port 8000 --reload
+```
+
+API 계약은 [Dashboard API Contract](docs/dashboard-api-contract.md)를 참고합니다. v0.9 구조 분리와 read-only API는 완료되었으며 Vue 화면은 v1.1에서 구현합니다.
 
 테스트 주문:
 
@@ -195,4 +212,4 @@ API 키와 계좌번호는 Git에 커밋하지 마십시오.
 
 ## Roadmap
 
-향후 개발 계획은 [docs/ROADMAP.md](docs/ROADMAP.md)에서 관리합니다.
+향후 개발 계획은 [docs/Roadmap.md](docs/Roadmap.md)에서 관리합니다.

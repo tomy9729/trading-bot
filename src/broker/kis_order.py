@@ -2,17 +2,20 @@ from datetime import datetime, time
 from typing import Any, Dict
 
 from src.broker.kis_client import KisClient
-from src.db.repository import TradingRepository
 from src.domain.order import OrderRequest, OrderResult
-from src.logs.trade_logger import get_trade_logger, write_trade_event
+from src.logs.trade_logger import get_trade_logger
 from src.runner.market_hours import MarketHours
 
 
 class KisOrder:
-    def __init__(self, client: KisClient, market_hours: MarketHours | None = None, trade_repository: TradingRepository | None = None):
+    def __init__(self, client: KisClient, market_hours: MarketHours | None = None):
+        """Create a KIS domestic order API wrapper.
+
+        @param client: Authenticated KIS HTTP client.
+        @param market_hours: Optional domestic market-hours validator.
+        """
         self.client = client
         self.market_hours = market_hours or MarketHours()
-        self.trade_repository = trade_repository
         self.logger = get_trade_logger()
 
     def buy_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
@@ -41,20 +44,6 @@ class KisOrder:
         if self.client.settings.dry_run:
             response = {"dry_run": True, "symbol": symbol, "side": side, "quantity": quantity}
             self.logger.info("[DRY-RUN %s] symbol=%s quantity=%s", side, symbol, quantity)
-            write_trade_event(
-                "order_dry_run",
-                {
-                    "market": "KR",
-                    "symbol": symbol,
-                    "side": side,
-                    "order_type": request.order_type,
-                    "requested_price": 0,
-                    "requested_quantity": quantity,
-                    "order_status": "dry_run",
-                    "order_result": response,
-                    "dry_run": True,
-                },
-            )
             return OrderResult(requested=request, dry_run=True, response=response)
 
         self._validate_market_order_time(side)
@@ -67,22 +56,8 @@ class KisOrder:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": "0",
         }
-        tr_id = self._order_tr_id(side)
+        tr_id = self.get_order_tr_id(side)
         self.logger.info("[ORDER REQUEST] side=%s symbol=%s quantity=%s tr_id=%s", side, symbol, quantity, tr_id)
-        order_row_id = self._insert_order_request(request)
-        write_trade_event(
-            "order_requested",
-            {
-                "market": "KR",
-                "symbol": symbol,
-                "side": side,
-                "order_type": request.order_type,
-                "requested_price": 0,
-                "requested_quantity": quantity,
-                "tr_id": tr_id,
-                "dry_run": False,
-            },
-        )
         try:
             response = self.client.post(
                 "/uapi/domestic-stock/v1/trading/order-cash",
@@ -90,48 +65,18 @@ class KisOrder:
                 payload,
                 use_hashkey=True,
             )
-        except Exception as exc:
+        except Exception:
             self.logger.exception("[ORDER FAILED] side=%s symbol=%s quantity=%s", side, symbol, quantity)
-            self._update_order_status(order_row_id, None, "FAILED", str(exc), {"error": str(exc), "error_type": exc.__class__.__name__})
-            write_trade_event(
-                "order_failed",
-                {
-                    "market": "KR",
-                    "symbol": symbol,
-                    "side": side,
-                    "order_type": request.order_type,
-                    "requested_price": 0,
-                    "requested_quantity": quantity,
-                    "tr_id": tr_id,
-                    "order_status": "failed",
-                    "fail_reason": str(exc),
-                    "fail_type": exc.__class__.__name__,
-                    "dry_run": False,
-                },
-            )
             raise
-        order_id = _get_order_id(response)
-        self._update_order_status(order_row_id, order_id, "ACCEPTED", None, response)
         self.logger.info("[ORDER RESPONSE] side=%s symbol=%s response=%s", side, symbol, response)
-        write_trade_event(
-            "order_response",
-            {
-                "market": "KR",
-                "symbol": symbol,
-                "side": side,
-                "order_type": request.order_type,
-                "requested_price": 0,
-                "requested_quantity": quantity,
-                "tr_id": tr_id,
-                "order_status": "accepted",
-                "order_id": order_id,
-                "order_result": response,
-                "dry_run": False,
-            },
-        )
         return OrderResult(requested=request, dry_run=False, response=response)
 
-    def _order_tr_id(self, side: str) -> str:
+    def get_order_tr_id(self, side: str) -> str:
+        """Return the KIS transaction id for a domestic order side.
+
+        @param side: BUY or SELL.
+        @returns: KIS transaction id.
+        """
         if self.client.settings.kis_is_mock:
             return "VTTC0802U" if side == "BUY" else "VTTC0801U"
         return "TTTC0802U" if side == "BUY" else "TTTC0801U"
@@ -148,47 +93,3 @@ class KisOrder:
             raise RuntimeError(
                 f"Live buy is blocked after the new-buy limit time: current_time={now_time.strftime('%H:%M:%S')}"
             )
-
-    def _insert_order_request(self, request: OrderRequest) -> int | None:
-        if self.trade_repository is None:
-            return None
-        return self.trade_repository.insert_order(
-            symbol=request.symbol,
-            side=request.side,
-            quantity=request.quantity,
-            price=0,
-            order_type=request.order_type,
-            status="REQUESTED",
-            raw_json={
-                "symbol": request.symbol,
-                "side": request.side,
-                "quantity": request.quantity,
-                "order_type": request.order_type,
-            },
-        )
-
-    def _update_order_status(
-        self,
-        order_row_id: int | None,
-        order_id: str | None,
-        status: str,
-        reason: str | None,
-        raw_json: Dict[str, Any] | None,
-    ) -> None:
-        if self.trade_repository is None:
-            return
-        self.trade_repository.update_order_status(
-            order_row_id=order_row_id,
-            order_id=order_id,
-            status=status,
-            reason=reason,
-            raw_json=raw_json,
-        )
-
-
-def _get_order_id(response: Dict[str, Any]) -> str | None:
-    output = response.get("output")
-    if not isinstance(output, dict):
-        return None
-    value = output.get("ODNO") or output.get("odno") or output.get("SOR_ODNO")
-    return str(value) if value not in (None, "") else None

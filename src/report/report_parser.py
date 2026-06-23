@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.config.runtime_paths import get_log_dir
+
 
 ANALYSIS_UNAVAILABLE = "분석 불가"
 LOG_LINE_PATTERN = re.compile(r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) (?P<level>\w+) (?P<message>.*)$")
@@ -41,7 +43,7 @@ def get_default_log_path(report_date: str) -> Path:
     @param report_date: Normalized YYYY-MM-DD date.
     @returns: logs/trade_YYYYMMDD.log path.
     """
-    return Path("logs") / f"trade_{report_date.replace('-', '')}.log"
+    return get_log_dir() / f"trade_{report_date.replace('-', '')}.log"
 
 
 def parse_log_file(log_path: Path) -> list[ReportEvent]:

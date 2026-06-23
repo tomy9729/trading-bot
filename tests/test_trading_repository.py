@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime
 
@@ -11,10 +12,10 @@ def test_repository_creates_tables(tmp_path):
 
     with sqlite3.connect(db_path) as connection:
         rows = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('orders', 'executions', 'positions', 'account_snapshots')"
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('orders', 'executions', 'positions', 'account_snapshots', 'bot_events')"
         ).fetchall()
 
-    assert {row[0] for row in rows} == {"orders", "executions", "positions", "account_snapshots"}
+    assert {row[0] for row in rows} == {"orders", "executions", "positions", "account_snapshots", "bot_events"}
 
 
 def test_repository_inserts_order_and_updates_status(tmp_path):
@@ -124,6 +125,81 @@ def test_repository_upserts_position_by_symbol(tmp_path):
         rows = connection.execute("SELECT symbol, quantity, avg_price FROM positions").fetchall()
 
     assert rows == [("005930", 2, 71000)]
+
+
+def test_repository_deletes_positions_missing_from_latest_balance(tmp_path):
+    repository = TradingRepository(tmp_path / "trading.db")
+    repository.upsert_position(symbol="005930", quantity=1)
+    repository.upsert_position(symbol="000660", quantity=2)
+
+    repository.delete_positions_except({"005930"})
+
+    assert [row["symbol"] for row in repository.get_current_positions()] == ["005930"]
+
+
+def test_repository_deletes_all_positions_for_empty_balance(tmp_path):
+    repository = TradingRepository(tmp_path / "trading.db")
+    repository.upsert_position(symbol="005930", quantity=1)
+
+    repository.delete_positions_except(set())
+
+    assert repository.get_current_positions() == []
+
+
+def test_repository_reads_orders_and_executions_by_trade_date(tmp_path):
+    repository = TradingRepository(tmp_path / "trading.db")
+    created_at = datetime(2026, 6, 23, 9, 30)
+    repository.insert_order(
+        symbol="005930",
+        side="BUY",
+        quantity=1,
+        order_type="MARKET",
+        created_at=created_at,
+    )
+    repository.insert_execution(
+        symbol="005930",
+        side="BUY",
+        quantity=1,
+        price=70000,
+        created_at=created_at,
+    )
+
+    assert [row["symbol"] for row in repository.get_orders("2026-06-23")] == ["005930"]
+    assert [row["symbol"] for row in repository.get_executions("2026-06-23")] == ["005930"]
+    assert repository.get_orders("2026-06-24") == []
+
+
+def test_repository_inserts_and_reads_bot_events(tmp_path):
+    repository = TradingRepository(tmp_path / "trading.db")
+    repository.insert_bot_event(
+        {
+            "timestamp": "2026-06-23T09:30:00.000+09:00",
+            "event_type": "order_skipped",
+            "market": "KR",
+            "symbol": "005930",
+            "symbol_name": "삼성전자",
+            "side": "BUY",
+            "reason": "NO_ORDER_QUANTITY",
+            "requested_quantity": 0,
+            "decision_price": 70000,
+            "market_snapshot": {
+                "current_price": 70000,
+                "candles": [{"close_price": 70000}],
+            },
+        }
+    )
+
+    events = repository.get_bot_events("2026-06-23")
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "order_skipped"
+    assert events[0]["symbol"] == "005930"
+    assert events[0]["quantity"] == 0
+    assert events[0]["price"] == 70000
+    assert events[0]["reason"] == "NO_ORDER_QUANTITY"
+    payload = json.loads(events[0]["payload_json"])
+    assert "candles" not in payload["market_snapshot"]
+    assert payload["market_snapshot"]["candle_count"] == 1
 
 
 def test_repository_inserts_account_snapshot_and_reads_cumulative_cost(tmp_path):

@@ -2,12 +2,12 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
 
 from src.config.env import Settings
+from src.config.runtime_paths import get_token_cache_path
 
 
 @dataclass
@@ -24,7 +24,7 @@ class KisAuth:
         self.settings = settings
         self.session = session or requests.Session()
         self._token: Optional[AccessToken] = None
-        self._cache_path = Path(".kis_token_cache.json")
+        self._cache_path = get_token_cache_path()
 
     def get_access_token(self) -> str:
         """Return a cached KIS access token or issue a new one.

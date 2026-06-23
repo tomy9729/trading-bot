@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from src.config.runtime_paths import get_bot_config_path
 from dotenv import load_dotenv
 
 
@@ -89,14 +91,15 @@ class BotConfig:
     watchlist: WatchlistConfig
 
 
-def load_bot_config(path: str = "config.yaml") -> BotConfig:
+def load_bot_config(path: str | Path | None = None) -> BotConfig:
     """Load non-secret trading bot configuration from YAML.
 
     @param path: YAML config path.
     @returns: Parsed bot config.
     """
     load_dotenv()
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    config_path = Path(path) if path is not None else get_bot_config_path()
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("config.yaml must contain a mapping")
     market = _get_dict(data, "market")

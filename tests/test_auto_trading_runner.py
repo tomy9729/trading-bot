@@ -291,6 +291,41 @@ def test_auto_runner_enters_safe_mode_when_startup_recovery_fails():
     assert "STARTUP_RECOVERY_FAILED" in runner.state.kill_switch_reasons
 
 
+def test_auto_runner_removes_positions_missing_from_latest_balance():
+    trade_repository = Mock()
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        Mock(),
+        Mock(),
+        Mock(),
+        Mock(),
+        Mock(),
+        trade_repository,
+    )
+    runner.state.positions = {
+        "005930": Mock(),
+    }
+
+    runner._persist_position_rows(
+        [
+            {
+                "pdno": "005930",
+                "hldg_qty": "1",
+                "pchs_avg_pric": "70000",
+            },
+            {
+                "pdno": "000660",
+                "hldg_qty": "0",
+                "pchs_avg_pric": "120000",
+            },
+        ]
+    )
+
+    trade_repository.upsert_position.assert_called_once()
+    trade_repository.delete_positions_except.assert_called_once_with({"005930"})
+
+
 @pytest.mark.parametrize(
     ("hour", "minute", "expected"),
     [

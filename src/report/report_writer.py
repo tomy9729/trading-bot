@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from src.config.runtime_paths import get_report_dir
 from src.report.missed_trade_analyzer import MissedTradeCandidate
 from src.report.report_analyzer import ReportAnalysis
 
@@ -14,7 +15,7 @@ def get_default_report_path(report_date: str) -> Path:
     @param report_date: Normalized YYYY-MM-DD date.
     @returns: reports/YYYY-MM-DD-daily-trading-report.md path.
     """
-    return Path("reports") / f"{report_date}-daily-trading-report.md"
+    return get_report_dir() / f"{report_date}-daily-trading-report.md"
 
 
 def write_report(report_date: str, analysis: ReportAnalysis, missed_candidates: list[MissedTradeCandidate], save: bool) -> Path | None:

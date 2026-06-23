@@ -1,6 +1,6 @@
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
-from src.broker.kis_order import KisOrder
+from src.domain.order import MarketOrderGateway
 from src.logs.trade_logger import get_trade_logger
 
 
@@ -9,7 +9,7 @@ class LiveRunner:
         self,
         market: KisMarket,
         account: KisAccount,
-        order: KisOrder,
+        order: MarketOrderGateway,
     ):
         self.market = market
         self.account = account

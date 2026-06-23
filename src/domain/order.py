@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
 
 
 @dataclass(frozen=True)
@@ -15,3 +15,13 @@ class OrderResult:
     requested: OrderRequest
     dry_run: bool
     response: Dict[str, Any] = field(default_factory=dict)
+
+
+class MarketOrderGateway(Protocol):
+    def buy_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
+        """Place a domestic market buy order."""
+        ...
+
+    def sell_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
+        """Place a domestic market sell order."""
+        ...

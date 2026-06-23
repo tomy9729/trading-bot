@@ -1,6 +1,6 @@
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
-from src.broker.kis_order import KisOrder
+from src.domain.order import MarketOrderGateway
 from src.logs.trade_logger import get_trade_logger
 
 
@@ -19,14 +19,14 @@ def calculate_order_quantity(available_buy_quantity: int, force_quantity: int | 
 
 
 class DryRunRunner:
-    def __init__(self, market: KisMarket, account: KisAccount, order: KisOrder):
+    def __init__(self, market: KisMarket, account: KisAccount, order: MarketOrderGateway):
         self.market = market
         self.account = account
         self.order = order
         self.logger = get_trade_logger()
 
     def test_buy(self, symbol: str, quantity: int = 1) -> dict:
-        """Run a dry-run or live-routed test buy through KisOrder.
+        """Run a dry-run or live-routed test buy through the order gateway.
 
         @param symbol: Six-digit domestic stock code.
         @param quantity: Order quantity.
@@ -36,7 +36,7 @@ class DryRunRunner:
         return self.order.buy_market(symbol, quantity)
 
     def test_sell(self, symbol: str, quantity: int = 1) -> dict:
-        """Run a dry-run or live-routed test sell through KisOrder.
+        """Run a dry-run or live-routed test sell through the order gateway.
 
         @param symbol: Six-digit domestic stock code.
         @param quantity: Order quantity.

@@ -4,6 +4,8 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from src.config.runtime_paths import get_env_file_path
+
 
 def _get_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -65,7 +67,7 @@ def load_settings() -> Settings:
     @returns: Immutable application settings.
     @raises ValueError: If a required KIS credential/account value is missing.
     """
-    load_dotenv()
+    load_dotenv(get_env_file_path())
     required_names = [
         "KIS_APP_KEY",
         "KIS_APP_SECRET",
