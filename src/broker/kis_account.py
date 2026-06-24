@@ -135,9 +135,18 @@ class KisAccount:
         )
         output = response.get("output2") or response.get("output")
         if isinstance(output, list):
-            return sum(_to_int(row.get("rlzt_pfls") or row.get("tot_pftrt_amt") or 0) for row in output if isinstance(row, dict))
+            return sum(
+                _to_int(row.get("tot_rlzt_pfls") or row.get("rlzt_pfls") or 0)
+                for row in output
+                if isinstance(row, dict)
+            )
         if isinstance(output, dict):
-            return _to_int(output.get("rlzt_pfls") or output.get("tot_pftrt_amt") or output.get("realized_pnl") or 0)
+            return _to_int(
+                output.get("tot_rlzt_pfls")
+                or output.get("rlzt_pfls")
+                or output.get("realized_pnl")
+                or 0
+            )
         raise RuntimeError(f"KIS daily PnL response missing output: {response}")
 
     def _balance_tr_id(self) -> str:

@@ -7,6 +7,7 @@ from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket
 from src.config.bot_config import BotConfig
 from src.config.env import Settings
+from src.config.strategy_metadata import create_strategy_metadata
 from src.db.repository import TradingRepository
 from src.domain.order import MarketOrderGateway
 from src.domain.position import Position, PositionState
@@ -41,6 +42,7 @@ class AutoTradingRunner:
             daily_max_loss_rate=bot_config.risk.max_daily_loss_percent,
         )
         self.bot_config = bot_config
+        self.strategy_metadata = create_strategy_metadata(bot_config)
         self.market_hours = market_hours
         self.domestic_market = domestic_market
         self.domestic_account = domestic_account
@@ -99,12 +101,23 @@ class AutoTradingRunner:
         self.cycle_id += 1
         self._reset_daily_state_if_needed()
         if not self.state.startup_recovered:
-            self._recover_startup_state()
+            self.recover_once()
         if self.bot_config.korea.enabled:
             if self.market_hours.is_domestic_open():
                 self._run_domestic_cycle()
             else:
                 self.logger.info("[AUTO WAIT] market=domestic")
+
+    def recover_once(self, save_snapshot: bool = False) -> None:
+        """Recover broker positions, open orders, executions, and local risk state.
+
+        @param save_snapshot: Whether to save an account snapshot after recovery.
+        @public
+        @mutate: Updates runtime state and synchronized database rows without placing orders.
+        """
+        self.account_service.recover_startup_state(self.state)
+        if save_snapshot and not self.state.safe_mode:
+            self.account_service.save_account_snapshot(self.state, force=True)
 
     def _run_domestic_cycle(self) -> None:
         if not self._sync_domestic_positions():
@@ -258,7 +271,7 @@ class AutoTradingRunner:
         )
 
     def _recover_startup_state(self) -> None:
-        self.account_service.recover_startup_state(self.state)
+        self.recover_once()
 
     def _restore_open_orders(self, rows: list[dict[str, Any]]) -> None:
         self.account_service.restore_open_orders(rows, self.state)
@@ -345,9 +358,9 @@ class AutoTradingRunner:
             {
                 **self._event_context(market, symbol, name),
                 "side": side,
-                "strategy_name": self.bot_config.strategy.name,
-                "strategy_version": None,
-                "applied_config": self._strategy_config_payload(),
+                "strategy_name": self.strategy_metadata["strategy_name"],
+                "strategy_version": self.strategy_metadata["strategy_version"],
+                "applied_config": self.strategy_metadata["applied_config"],
                 "market_snapshot": self._market_snapshot_payload(snapshot),
                 "decision": {
                     "action": signal.signal,
@@ -387,31 +400,6 @@ class AutoTradingRunner:
             "bot_status": "running",
             "symbol": symbol,
             "symbol_name": name,
-        }
-
-    def _strategy_config_payload(self) -> dict:
-        strategy = self.bot_config.strategy
-        risk = self.bot_config.risk
-        return {
-            "volume_multiplier": strategy.volume_multiplier,
-            "breakout_window_minutes": strategy.breakout_window_minutes,
-            "volume_lookback_minutes": strategy.volume_lookback_minutes,
-            "vwap_hold_candles": strategy.vwap_hold_candles,
-            "vwap_entry_price_ratio": strategy.vwap_entry_price_ratio,
-            "max_daily_rise_percent": strategy.max_daily_rise_percent,
-            "min_execution_strength": strategy.min_execution_strength,
-            "max_spread_percent": strategy.max_spread_percent,
-            "max_upper_wick_percent": strategy.max_upper_wick_percent,
-            "market_down_block_threshold_percent": strategy.market_down_block_threshold_percent,
-            "take_profit_percent": risk.take_profit_percent,
-            "second_take_profit_percent": risk.second_take_profit_percent,
-            "buy_fee_percent": self.bot_config.cost.buy_fee_percent,
-            "sell_fee_percent": self.bot_config.cost.sell_fee_percent,
-            "sell_tax_percent": self.bot_config.cost.sell_tax_percent,
-            "slippage_percent": self.bot_config.cost.slippage_percent,
-            "stop_loss_percent": risk.stop_loss_percent,
-            "stale_position_minutes": risk.stale_position_minutes,
-            "stale_position_min_profit_percent": risk.stale_position_min_profit_percent,
         }
 
     def _market_snapshot_payload(self, snapshot) -> dict:

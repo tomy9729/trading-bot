@@ -61,3 +61,28 @@ def test_missed_candidate_and_markdown_include_adjustment(tmp_path):
     assert candidates[0].name == "삼성전자"
     assert "거래량 기준" in markdown
     assert "매수될 뻔한 후보 분석" in markdown
+
+
+def test_report_includes_strategy_and_pnl_reconciliation():
+    analysis = analyze_trades([])
+
+    markdown = create_report_markdown(
+        "2026-06-23",
+        analysis,
+        [],
+        account_snapshot={
+            "daily_realized_pnl": 750,
+            "broker_daily_realized_pnl": 800,
+            "realized_pnl_difference": -50,
+            "cumulative_cost": 150,
+        },
+        strategy_metadata={
+            "strategy_name": "vwap-volume-breakout",
+            "strategy_version": "abc123def456",
+        },
+    )
+
+    assert "## 2. 운영 정합성" in markdown
+    assert "전략 버전: abc123def456" in markdown
+    assert "실현손익 차이: -50" in markdown
+    assert "손익 정합성: 확인 필요" in markdown

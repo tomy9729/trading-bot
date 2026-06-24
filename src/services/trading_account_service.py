@@ -4,6 +4,7 @@ from typing import Any, Callable
 from src.broker.kis_account import KisAccount
 from src.config.bot_config import BotConfig, TradingCostConfig
 from src.config.env import Settings
+from src.config.strategy_metadata import create_strategy_metadata
 from src.db.repository import TradingRepository
 from src.domain.position import Position
 from src.logs.trade_logger import write_trade_event
@@ -45,6 +46,7 @@ class TradingAccountService:
         self.activate_kill_switch = activate_kill_switch
         self.event_context = event_context
         self.logger = logger
+        self.strategy_metadata = create_strategy_metadata(bot_config)
         self.last_account_snapshot_at: datetime | None = None
 
     def recover_startup_state(self, state: AutoTradingState) -> None:
@@ -66,6 +68,7 @@ class TradingAccountService:
             )
             self.restore_daily_execution_state(executions, state)
             self.persist_execution_rows(executions)
+            self.reconcile_order_states(open_orders, executions, state)
             state.daily_realized_pnl = _calculate_daily_net_realized_pnl(executions, self.bot_config.cost)
             state.daily_loss_amount = abs(min(0, state.daily_realized_pnl))
             if (
@@ -86,6 +89,7 @@ class TradingAccountService:
                     "consecutive_losses": state.consecutive_loss_count,
                     "safe_mode": state.safe_mode,
                     "kill_switch_reasons": sorted(state.kill_switch_reasons),
+                    **self.strategy_metadata,
                 },
             )
         except Exception as exc:
@@ -119,12 +123,107 @@ class TradingAccountService:
         @mutate: Updates daily entries and consecutive losses.
         """
         try:
+            open_orders = self.call_with_retries(self.domestic_account.get_open_orders, "open_orders", "KR")
             rows = self.call_with_retries(self.domestic_account.get_today_executions, "today_executions", "KR")
         except Exception:
             self.activate_safe_mode("EXECUTION_SYNC_FAILED", None)
             return
+        self.restore_open_orders(open_orders, state)
         self.restore_daily_execution_state(rows, state)
         self.persist_execution_rows(rows)
+        self.reconcile_order_states(open_orders, rows, state)
+
+    def reconcile_order_states(
+        self,
+        open_orders: list[dict[str, Any]],
+        executions: list[dict[str, Any]],
+        state: AutoTradingState,
+        now: datetime | None = None,
+    ) -> None:
+        """Reconcile local active orders with broker open orders and executions.
+
+        @param open_orders: Current broker open-order rows.
+        @param executions: Current broker execution rows.
+        @param state: Mutable automatic trading state.
+        @param now: Optional reconciliation timestamp.
+        @mutate: Updates local order statuses and may activate safe mode.
+        """
+        if self.trade_repository is None:
+            return
+        current_time = now or datetime.now()
+        active_orders = self.trade_repository.get_active_orders(current_time.strftime("%Y-%m-%d"))
+        open_order_ids = {_row_order_id(row) for row in open_orders if _row_order_id(row)}
+        execution_order_ids = {_row_order_id(row) for row in executions if _row_order_id(row)}
+
+        for order in active_orders:
+            order_row_id = int(order["id"])
+            order_id = str(order.get("order_id") or "") or None
+            symbol = str(order.get("symbol") or "")
+            side = str(order.get("side") or "")
+            matched_execution = (
+                order_id in execution_order_ids
+                if order_id is not None
+                else _has_symbol_side(executions, symbol, side)
+            )
+            matched_open_order = (
+                order_id in open_order_ids
+                if order_id is not None
+                else _has_symbol_side(open_orders, symbol, side)
+            )
+            order_age_seconds = _get_order_age_seconds(order, current_time)
+
+            if matched_execution and not matched_open_order:
+                self.trade_repository.update_order_status(
+                    order_row_id=order_row_id,
+                    order_id=order_id,
+                    status="FILLED",
+                    reason=None,
+                )
+                continue
+
+            if matched_open_order and order_age_seconds < self.bot_config.risk.unfilled_order_timeout_seconds:
+                self.trade_repository.update_order_status(
+                    order_row_id=order_row_id,
+                    order_id=order_id,
+                    status="PARTIALLY_FILLED" if matched_execution else "OPEN",
+                    reason=None,
+                )
+                continue
+
+            if order_age_seconds < self.bot_config.risk.unfilled_order_timeout_seconds:
+                continue
+
+            status = "UNFILLED_TIMEOUT" if matched_open_order else "RECONCILIATION_REQUIRED"
+            reason = (
+                f"order_age_seconds={int(order_age_seconds)} "
+                f"timeout_seconds={self.bot_config.risk.unfilled_order_timeout_seconds}"
+            )
+            self.trade_repository.update_order_status(
+                order_row_id=order_row_id,
+                order_id=order_id,
+                status=status,
+                reason=reason,
+            )
+            write_trade_event(
+                "order_reconciliation_required",
+                {
+                    **self.event_context("KR", symbol),
+                    "side": side,
+                    "order_id": order_id,
+                    "order_row_id": order_row_id,
+                    "order_status": status,
+                    "reason": reason,
+                },
+            )
+            self.activate_safe_mode(
+                status,
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "order_id": order_id,
+                    "order_row_id": order_row_id,
+                },
+            )
 
     def save_account_snapshot(self, state: AutoTradingState, force: bool = False) -> None:
         """Save one periodic account asset snapshot.
@@ -140,6 +239,8 @@ class TradingAccountService:
         try:
             summary = self.domestic_account.get_account_summary()
             available_cash = self.domestic_account.get_available_cash()
+            broker_daily_realized_pnl = float(self.domestic_account.get_daily_realized_pnl())
+            realized_pnl_difference = float(state.daily_realized_pnl) - broker_daily_realized_pnl
             snapshot = {
                 "cash_balance": _row_float(summary, ("dnca_tot_amt", "cash_balance")),
                 "available_cash": float(available_cash),
@@ -147,6 +248,8 @@ class TradingAccountService:
                 "total_asset": _row_float(summary, ("tot_evlu_amt", "nass_amt", "total_asset")),
                 "unrealized_pnl": _row_float(summary, ("evlu_pfls_smtl_amt", "unrealized_pnl")),
                 "daily_realized_pnl": float(state.daily_realized_pnl),
+                "broker_daily_realized_pnl": broker_daily_realized_pnl,
+                "realized_pnl_difference": realized_pnl_difference,
                 "cumulative_cost": (
                     self.trade_repository.get_cumulative_execution_cost(now.strftime("%Y-%m-%d"))
                     if self.trade_repository is not None
@@ -179,6 +282,17 @@ class TradingAccountService:
             snapshot["cumulative_cost"],
         )
         write_trade_event("account_snapshot", {**self.event_context("KR"), **snapshot})
+        if snapshot["realized_pnl_difference"] != 0:
+            write_trade_event(
+                "realized_pnl_difference",
+                {
+                    **self.event_context("KR"),
+                    "internal_daily_realized_pnl": snapshot["daily_realized_pnl"],
+                    "broker_daily_realized_pnl": snapshot["broker_daily_realized_pnl"],
+                    "difference": snapshot["realized_pnl_difference"],
+                    **self.strategy_metadata,
+                },
+            )
 
     def reconcile_uncertain_order(
         self,
@@ -536,3 +650,12 @@ def _parse_row_datetime(date_text: str, time_text: str) -> datetime | None:
         return datetime.strptime(f"{digits_date}{digits_time[:6]}", "%Y%m%d%H%M%S")
     except ValueError:
         return None
+
+
+def _has_symbol_side(rows: list[dict[str, Any]], symbol: str, side: str) -> bool:
+    return any(_row_symbol(row) == symbol and _row_order_side(row) == side for row in rows)
+
+
+def _get_order_age_seconds(order: dict[str, Any], now: datetime) -> float:
+    created_at = datetime.strptime(str(order["created_at"]), "%Y-%m-%d %H:%M:%S")
+    return max(0.0, (now - created_at).total_seconds())

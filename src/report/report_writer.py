@@ -18,16 +18,31 @@ def get_default_report_path(report_date: str) -> Path:
     return get_report_dir() / f"{report_date}-daily-trading-report.md"
 
 
-def write_report(report_date: str, analysis: ReportAnalysis, missed_candidates: list[MissedTradeCandidate], save: bool) -> Path | None:
+def write_report(
+    report_date: str,
+    analysis: ReportAnalysis,
+    missed_candidates: list[MissedTradeCandidate],
+    save: bool,
+    account_snapshot: dict[str, Any] | None = None,
+    strategy_metadata: dict[str, Any] | None = None,
+) -> Path | None:
     """Create a daily trading report and optionally save it.
 
     @param report_date: Normalized YYYY-MM-DD date.
     @param analysis: Actual trade analysis.
     @param missed_candidates: Missed candidate analysis.
     @param save: Whether to save the report file.
+    @param account_snapshot: Optional latest account snapshot for the date.
+    @param strategy_metadata: Optional active strategy metadata.
     @returns: Saved report path, or None when save is false.
     """
-    content = create_report_markdown(report_date, analysis, missed_candidates)
+    content = create_report_markdown(
+        report_date,
+        analysis,
+        missed_candidates,
+        account_snapshot,
+        strategy_metadata,
+    )
     if not save:
         print(content)
         return None
@@ -37,12 +52,20 @@ def write_report(report_date: str, analysis: ReportAnalysis, missed_candidates: 
     return report_path
 
 
-def create_report_markdown(report_date: str, analysis: ReportAnalysis, missed_candidates: list[MissedTradeCandidate]) -> str:
+def create_report_markdown(
+    report_date: str,
+    analysis: ReportAnalysis,
+    missed_candidates: list[MissedTradeCandidate],
+    account_snapshot: dict[str, Any] | None = None,
+    strategy_metadata: dict[str, Any] | None = None,
+) -> str:
     """Create Markdown content for a daily trading report.
 
     @param report_date: Normalized YYYY-MM-DD date.
     @param analysis: Actual trade analysis.
     @param missed_candidates: Missed candidate analysis.
+    @param account_snapshot: Optional latest account snapshot for the date.
+    @param strategy_metadata: Optional active strategy metadata.
     @returns: Markdown report content.
     """
     lines = [
@@ -62,31 +85,35 @@ def create_report_markdown(report_date: str, analysis: ReportAnalysis, missed_ca
         f"- 최대 손실 거래: {analysis.summary.worst_trade}",
         f"- 평균 보유 시간: {_format_minutes(analysis.summary.average_hold_minutes)}",
         "",
-        "## 2. 실제 매수/매도 기록",
+        "## 2. 운영 정합성",
+        "",
+        _operation_reconciliation(account_snapshot, strategy_metadata),
+        "",
+        "## 3. 실제 매수/매도 기록",
         "",
         _trade_records_table(analysis),
         "",
-        "## 3. 종목별 상세 결과",
+        "## 4. 종목별 상세 결과",
         "",
         _closed_trades_table(analysis),
         "",
-        "## 4. 매수될 뻔한 후보 분석",
+        "## 5. 매수될 뻔한 후보 분석",
         "",
         _missed_candidates_table(missed_candidates),
         "",
-        "## 5. 전략 개선 분석",
+        "## 6. 전략 개선 분석",
         "",
         _strategy_analysis(analysis),
         "",
-        "## 6. 놓친 기회 분석",
+        "## 7. 놓친 기회 분석",
         "",
         _missed_opportunity_analysis(missed_candidates),
         "",
-        "## 7. 위험 회피 성공 분석",
+        "## 8. 위험 회피 성공 분석",
         "",
         _risk_avoidance_analysis(missed_candidates),
         "",
-        "## 8. 결론",
+        "## 9. 결론",
         "",
         _conclusion(analysis, missed_candidates),
         "",
@@ -97,7 +124,7 @@ def create_report_markdown(report_date: str, analysis: ReportAnalysis, missed_ca
 def _trade_records_table(analysis: ReportAnalysis) -> str:
     if not analysis.trade_records:
         return ANALYSIS_UNAVAILABLE
-    rows = ["| 시간 | 종목 코드 | 종목명 | 구분 | 가격 | 수량 | 금액 | 수익률 | 손익 | 사유 |", "|---|---|---|---|---:|---:|---:|---:|---:|---|"]
+    rows = ["| 시간 | 종목 코드 | 종목명 | 구분 | 가격 | 수량 | 금액 | 거래비용 | 수익률 | 손익 | 사유 |", "|---|---|---|---|---:|---:|---:|---:|---:|---:|---|"]
     for record in analysis.trade_records:
         rows.append(
             f"| {record.time} | {record.symbol} | {record.name} | {record.side} | {_format_number(record.price)} | {_format_number(record.quantity)} | {_format_money(record.amount)} | {_format_money(record.total_cost)} | {_format_percent(record.return_rate)} | {_format_money(record.profit_loss)} | {record.reason} |"
@@ -108,7 +135,7 @@ def _trade_records_table(analysis: ReportAnalysis) -> str:
 def _closed_trades_table(analysis: ReportAnalysis) -> str:
     if not analysis.closed_trades:
         return ANALYSIS_UNAVAILABLE
-    rows = ["| 종목 코드 | 종목명 | 매수 시간 | 매수 가격 | 매도 시간 | 매도 가격 | 보유 시간 | 수익률 | 실현 손익 | 매수 사유 | 매도 사유 |", "|---|---|---|---:|---|---:|---:|---:|---:|---|---|"]
+    rows = ["| 종목 코드 | 종목명 | 매수 시간 | 매수 가격 | 매도 시간 | 매도 가격 | 보유 시간 | 총손익 | 거래비용 | 순수익률 | 순손익 | 매수 사유 | 매도 사유 |", "|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---|---|"]
     for trade in analysis.closed_trades:
         rows.append(
             f"| {trade.symbol} | {trade.name} | {trade.buy_time} | {_format_number(trade.buy_price)} | {trade.sell_time} | {_format_number(trade.sell_price)} | {_format_minutes(trade.hold_minutes)} | {_format_money(trade.gross_profit_loss)} | {_format_money(trade.total_cost)} | {_format_percent(trade.return_rate)} | {_format_money(trade.profit_loss)} | {trade.buy_reason} | {trade.sell_reason} |"
@@ -128,6 +155,32 @@ def _missed_candidates_table(candidates: list[MissedTradeCandidate]) -> str:
             f"| {candidate.detected_at} | {candidate.symbol} | {candidate.name} | {_format_number(candidate.price)} | {_format_number(candidate.later_high)} | {_format_number(candidate.later_low)} | {candidate.reason} | {', '.join(candidate.satisfied_conditions) or ANALYSIS_UNAVAILABLE} | {', '.join(candidate.failed_conditions) or ANALYSIS_UNAVAILABLE} | {_format_percent(candidate.condition_match_rate)} | {_format_simulation_rates(candidate)} | {_format_simulation_pnl(candidate)} | {candidate.adjustment} |"
         )
     return "\n".join(rows)
+
+
+def _operation_reconciliation(
+    account_snapshot: dict[str, Any] | None,
+    strategy_metadata: dict[str, Any] | None,
+) -> str:
+    lines = []
+    if strategy_metadata:
+        lines.extend(
+            [
+                f"- 전략명: {strategy_metadata.get('strategy_name') or ANALYSIS_UNAVAILABLE}",
+                f"- 전략 버전: {strategy_metadata.get('strategy_version') or ANALYSIS_UNAVAILABLE}",
+            ]
+        )
+    if account_snapshot:
+        difference = account_snapshot.get("realized_pnl_difference")
+        lines.extend(
+            [
+                f"- 내부 계산 실현손익: {_format_money(account_snapshot.get('daily_realized_pnl'))}",
+                f"- 증권사 실현손익: {_format_money(account_snapshot.get('broker_daily_realized_pnl'))}",
+                f"- 실현손익 차이: {_format_money(difference)}",
+                f"- 누적 거래비용: {_format_money(account_snapshot.get('cumulative_cost'))}",
+                f"- 손익 정합성: {'일치' if difference == 0 else '확인 필요'}",
+            ]
+        )
+    return "\n".join(lines) if lines else ANALYSIS_UNAVAILABLE
 
 
 def _strategy_analysis(analysis: ReportAnalysis) -> str:

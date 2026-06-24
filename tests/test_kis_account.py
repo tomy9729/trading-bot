@@ -53,3 +53,26 @@ def test_get_account_summary_returns_first_output2_row():
         "dnca_tot_amt": "504680",
         "tot_evlu_amt": "496333",
     }
+
+
+def test_get_daily_realized_pnl_uses_kis_total_realized_profit():
+    client = Mock()
+    client.settings.kis_account_no = "12345678"
+    client.settings.kis_account_product_code = "01"
+    client.settings.kis_is_mock = False
+    client.get.return_value = {
+        "output1": [{"rlzt_pfls": "-4752"}],
+        "output2": {
+            "tot_rlzt_pfls": "-4752",
+            "tot_pftrt": "-0.95",
+        },
+        "rt_cd": "0",
+    }
+
+    account = KisAccount(client)
+
+    assert account.get_daily_realized_pnl() == -4752
+    assert client.get.call_args.args[0] == (
+        "/uapi/domestic-stock/v1/trading/inquire-period-trade-profit"
+    )
+    assert client.get.call_args.args[1] == "TTTC8715R"

@@ -12,16 +12,25 @@ class TradingOrderService:
         settings: Settings,
         broker_order: KisOrder,
         trade_repository: TradingRepository | None = None,
+        strategy_name: str | None = None,
+        strategy_version: str | None = None,
+        applied_config: dict[str, Any] | None = None,
     ):
         """Create an order service that coordinates broker calls and persistence.
 
         @param settings: Runtime settings.
         @param broker_order: Pure KIS order API wrapper.
         @param trade_repository: Optional trading repository.
+        @param strategy_name: Active strategy name.
+        @param strategy_version: Deterministic active strategy version.
+        @param applied_config: Active operational configuration.
         """
         self.settings = settings
         self.broker_order = broker_order
         self.trade_repository = trade_repository
+        self.strategy_name = strategy_name
+        self.strategy_version = strategy_version
+        self.applied_config = applied_config or {}
 
     def buy_market(self, symbol: str, quantity: int) -> dict[str, Any]:
         """Place and persist a domestic market buy order.
@@ -55,6 +64,9 @@ class TradingOrderService:
                     "requested_quantity": quantity,
                     "order_status": "dry_run",
                     "order_result": response,
+                    "strategy_name": self.strategy_name,
+                    "strategy_version": self.strategy_version,
+                    "applied_config": self.applied_config,
                     "dry_run": True,
                 },
             )
@@ -72,6 +84,9 @@ class TradingOrderService:
                 "requested_price": 0,
                 "requested_quantity": quantity,
                 "tr_id": tr_id,
+                "strategy_name": self.strategy_name,
+                "strategy_version": self.strategy_version,
+                "applied_config": self.applied_config,
                 "dry_run": False,
             },
         )
@@ -98,6 +113,8 @@ class TradingOrderService:
                     "order_status": "failed",
                     "fail_reason": str(exc),
                     "fail_type": exc.__class__.__name__,
+                    "strategy_name": self.strategy_name,
+                    "strategy_version": self.strategy_version,
                     "dry_run": False,
                 },
             )
@@ -117,6 +134,8 @@ class TradingOrderService:
                 "order_status": "accepted",
                 "order_id": order_id,
                 "order_result": response,
+                "strategy_name": self.strategy_name,
+                "strategy_version": self.strategy_version,
                 "dry_run": False,
             },
         )
@@ -137,11 +156,14 @@ class TradingOrderService:
             price=0,
             order_type="MARKET",
             status="REQUESTED",
+            strategy_name=self.strategy_name,
             raw_json={
                 "symbol": symbol,
                 "side": side,
                 "quantity": quantity,
                 "order_type": "MARKET",
+                "strategy_version": self.strategy_version,
+                "applied_config": self.applied_config,
             },
         )
 

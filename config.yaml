@@ -12,10 +12,10 @@ market:
 
 strategy:
     name: "vwap-volume-breakout-scalping"
-    volume_multiplier: 1.5
+    volume_multiplier: 1.75
     breakout_window_minutes: 5
     volume_lookback_minutes: 5
-    vwap_hold_candles: 3
+    vwap_hold_candles: 5
     max_daily_rise_percent: 15.0
     previous_candle_max_drop_percent: -2.0
     min_execution_strength: 55.0
@@ -49,7 +49,7 @@ watchlist:
     kr:
         enabled: true
         mode: dynamic
-        top_trading_value_limit: 50
+        top_trading_value_limit: 100
         refresh_interval_seconds: 180
         exclude_vi_after_minutes: 10
         exclude_warning_stocks: true

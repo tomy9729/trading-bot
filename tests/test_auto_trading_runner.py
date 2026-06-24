@@ -291,6 +291,29 @@ def test_auto_runner_enters_safe_mode_when_startup_recovery_fails():
     assert "STARTUP_RECOVERY_FAILED" in runner.state.kill_switch_reasons
 
 
+def test_auto_runner_recover_once_does_not_place_orders():
+    domestic_account = Mock()
+    domestic_account.get_balance.return_value = []
+    domestic_account.get_open_orders.return_value = []
+    domestic_account.get_today_executions.return_value = []
+    domestic_order = Mock()
+    runner = AutoTradingRunner(
+        _settings(),
+        _bot_config(),
+        Mock(),
+        Mock(),
+        domestic_account,
+        domestic_order,
+        Mock(),
+    )
+
+    runner.recover_once()
+
+    assert runner.state.startup_recovered is True
+    domestic_order.buy_market.assert_not_called()
+    domestic_order.sell_market.assert_not_called()
+
+
 def test_auto_runner_removes_positions_missing_from_latest_balance():
     trade_repository = Mock()
     runner = AutoTradingRunner(

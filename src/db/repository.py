@@ -136,6 +136,24 @@ class TradingRepository:
             "update_order_status",
         )
 
+    def get_active_orders(self, trade_date: str) -> list[dict[str, Any]]:
+        """Return orders that still require broker reconciliation.
+
+        @param trade_date: Date in YYYY-MM-DD format.
+        @returns: Active order rows ordered by creation time.
+        """
+        return self._fetch_all(
+            """
+            SELECT *
+            FROM orders
+            WHERE trade_date = ?
+              AND status IN ('REQUESTED', 'ACCEPTED', 'OPEN', 'PARTIALLY_FILLED')
+            ORDER BY created_at, id
+            """,
+            (trade_date,),
+            "get_active_orders",
+        )
+
     def insert_execution(
         self,
         *,
@@ -433,6 +451,8 @@ class TradingRepository:
         unrealized_pnl: float | None,
         daily_realized_pnl: float | None,
         cumulative_cost: float | None,
+        broker_daily_realized_pnl: float | None = None,
+        realized_pnl_difference: float | None = None,
         raw_json: Any = None,
         recorded_at: datetime | None = None,
     ) -> int | None:
@@ -445,6 +465,8 @@ class TradingRepository:
         @param unrealized_pnl: Current unrealized profit/loss.
         @param daily_realized_pnl: Today's net realized profit/loss.
         @param cumulative_cost: Today's cumulative fees and taxes.
+        @param broker_daily_realized_pnl: Broker-reported daily realized profit/loss.
+        @param realized_pnl_difference: Internal minus broker realized profit/loss.
         @param raw_json: Raw KIS account summary.
         @param recorded_at: Optional snapshot timestamp.
         @returns: Inserted row id, or None when DB save failed.
@@ -462,9 +484,11 @@ class TradingRepository:
               unrealized_pnl,
               daily_realized_pnl,
               cumulative_cost,
+              broker_daily_realized_pnl,
+              realized_pnl_difference,
               raw_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _datetime_text(saved_at),
@@ -476,6 +500,8 @@ class TradingRepository:
                 unrealized_pnl,
                 daily_realized_pnl,
                 cumulative_cost,
+                broker_daily_realized_pnl,
+                realized_pnl_difference,
                 _json_text(raw_json),
             ),
             "insert_account_snapshot",
@@ -502,16 +528,25 @@ class TradingRepository:
             self.logger.exception("[DB READ FAILED] operation=get_cumulative_execution_cost")
             return 0.0
 
-    def get_latest_account_snapshot(self) -> dict[str, Any] | None:
+    def get_latest_account_snapshot(self, trade_date: str | None = None) -> dict[str, Any] | None:
         """Return the most recently saved account snapshot.
 
+        @param trade_date: Optional date in YYYY-MM-DD format.
         @returns: Latest account snapshot row, or None when unavailable.
         """
-        rows = self._fetch_all(
-            "SELECT * FROM account_snapshots ORDER BY recorded_at DESC, id DESC LIMIT 1",
-            (),
-            "get_latest_account_snapshot",
-        )
+        if trade_date is None:
+            sql = "SELECT * FROM account_snapshots ORDER BY recorded_at DESC, id DESC LIMIT 1"
+            params = ()
+        else:
+            sql = """
+                SELECT *
+                FROM account_snapshots
+                WHERE trade_date = ?
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT 1
+            """
+            params = (trade_date,)
+        rows = self._fetch_all(sql, params, "get_latest_account_snapshot")
         return rows[0] if rows else None
 
     def upsert_position(

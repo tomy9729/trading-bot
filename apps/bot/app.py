@@ -7,6 +7,7 @@ from src.broker.kis_market import KisMarket
 from src.broker.kis_order import KisOrder
 from src.config.bot_config import load_bot_config
 from src.config.env import load_settings
+from src.config.strategy_metadata import create_strategy_metadata
 from src.db.repository import TradingRepository
 from src.logs.trade_logger import get_trade_logger, set_trade_event_sink
 from src.runner.auto_trading_runner import AutoTradingRunner
@@ -26,12 +27,16 @@ def main() -> int:
         from src.report.daily_report import run_report_command
 
         return run_report_command(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "validate":
+        from src.operations.operational_validator import run_validation_command
+
+        return run_validation_command(sys.argv[2:])
 
     parser = argparse.ArgumentParser(description="KIS VWAP volume-breakout trading bot")
     parser.add_argument(
         "--mode",
         default="dry-run",
-        choices=["dry-run", "live", "monitor", "test-order", "test-buy", "test-sell"],
+        choices=["dry-run", "live", "monitor", "recover", "test-order", "test-buy", "test-sell"],
     )
     parser.add_argument("--symbol", default="005930")
     parser.add_argument("--quantity", type=int, default=1)
@@ -42,6 +47,7 @@ def main() -> int:
     try:
         settings = load_settings()
         bot_config = load_bot_config()
+        strategy_metadata = create_strategy_metadata(bot_config)
         trade_repository = TradingRepository()
         set_trade_event_sink(trade_repository.insert_bot_event)
         client = KisClient(settings)
@@ -49,7 +55,14 @@ def main() -> int:
         market = KisMarket(client)
         account = KisAccount(client)
         broker_order = KisOrder(client, market_hours)
-        order = TradingOrderService(settings, broker_order, trade_repository)
+        order = TradingOrderService(
+            settings,
+            broker_order,
+            trade_repository,
+            strategy_name=strategy_metadata["strategy_name"],
+            strategy_version=strategy_metadata["strategy_version"],
+            applied_config=strategy_metadata["applied_config"],
+        )
         watchlist_manager = WatchlistManager(bot_config, market_hours, market)
         dry_runner = DryRunRunner(market, account, order)
         live_runner = LiveRunner(market, account, order)
@@ -81,6 +94,16 @@ def main() -> int:
             logger.info("[LIVE READY] result=%s", result)
         elif args.mode == "monitor":
             auto_runner.run_forever(args.interval_seconds)
+        elif args.mode == "recover":
+            auto_runner.recover_once(save_snapshot=True)
+            logger.info(
+                "[RECOVERY COMPLETE] safe_mode=%s reasons=%s positions=%s pending_orders=%s",
+                auto_runner.state.safe_mode,
+                sorted(auto_runner.state.kill_switch_reasons),
+                sorted(auto_runner.state.positions),
+                sorted(auto_runner.state.pending_order_symbols),
+            )
+            return 2 if auto_runner.state.safe_mode else 0
         elif args.mode in {"test-order", "test-buy"}:
             dry_runner.test_buy(args.symbol, args.quantity)
         elif args.mode == "test-sell":

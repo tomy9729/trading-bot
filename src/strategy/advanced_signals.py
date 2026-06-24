@@ -269,7 +269,7 @@ class ExitSignal:
             matched_conditions,
             failed_conditions,
             "VOLUME_DROPPED_AFTER_BREAKOUT",
-            snapshot.volume_declining and trade_result.net_profit_loss > 0,
+            snapshot.volume_declining and snapshot.current_price <= snapshot.recent_high,
             first_exit_reason,
         )
         first_exit_reason = _append_exit_condition_result(

@@ -98,6 +98,8 @@ def initialize_database(db_path: str | Path | None = None) -> None:
               unrealized_pnl REAL,
               daily_realized_pnl REAL,
               cumulative_cost REAL,
+              broker_daily_realized_pnl REAL,
+              realized_pnl_difference REAL,
 
               raw_json TEXT
             );
@@ -133,6 +135,8 @@ def initialize_database(db_path: str | Path | None = None) -> None:
         )
         _ensure_column(connection, "executions", "gross_pnl", "REAL")
         _ensure_column(connection, "executions", "total_cost", "REAL DEFAULT 0")
+        _ensure_column(connection, "account_snapshots", "broker_daily_realized_pnl", "REAL")
+        _ensure_column(connection, "account_snapshots", "realized_pnl_difference", "REAL")
 
 
 def _ensure_column(connection, table: str, column: str, definition: str) -> None:

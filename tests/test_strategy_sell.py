@@ -77,13 +77,32 @@ def test_volume_decline_does_not_exit_when_estimated_net_profit_is_negative():
     assert signal.details["net_profit_rate"] < 0
 
 
-def test_volume_decline_exits_when_estimated_net_profit_is_positive():
+def test_volume_decline_does_not_exit_when_estimated_net_profit_is_positive():
     now = datetime(2026, 1, 1, 10, 0)
     signal = ExitSignal(load_bot_config()).evaluate(
         _position(now),
         _market(
             current_price=1005,
             vwap=999,
+            recent_high=1000,
+            volume_declining=True,
+            market_direction_rate=0.0,
+        ),
+        now,
+    )
+
+    assert signal.allowed is False
+    assert signal.reason == "EXIT_CONDITION_NOT_MET"
+
+
+def test_volume_decline_exits_when_breakout_is_not_held():
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(load_bot_config()).evaluate(
+        _position(now),
+        _market(
+            current_price=1005,
+            vwap=999,
+            recent_high=1005,
             volume_declining=True,
             market_direction_rate=0.0,
         ),

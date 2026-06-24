@@ -30,11 +30,14 @@ def test_trading_order_service_persists_accepted_order():
         price=0,
         order_type="MARKET",
         status="REQUESTED",
+        strategy_name=None,
         raw_json={
             "symbol": "005930",
             "side": "BUY",
             "quantity": 1,
             "order_type": "MARKET",
+            "strategy_version": None,
+            "applied_config": {},
         },
     )
     repository.update_order_status.assert_called_once_with(

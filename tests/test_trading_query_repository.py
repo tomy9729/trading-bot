@@ -28,6 +28,7 @@ def test_query_repository_reads_dashboard_data_without_write_methods(tmp_path):
     assert len(reader.get_bot_events("2026-06-23")) == 1
     assert len(reader.get_orders("2026-06-23")) == 1
     assert not hasattr(reader, "insert_order")
+    assert reader.is_available() is True
 
 
 def test_query_repository_does_not_create_missing_database(tmp_path):
@@ -36,3 +37,4 @@ def test_query_repository_does_not_create_missing_database(tmp_path):
 
     assert reader.get_current_positions() == []
     assert db_path.exists() is False
+    assert reader.is_available() is False

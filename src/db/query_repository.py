@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from src.db.connection import get_read_connection
+from src.db.connection import get_database_path, get_read_connection
 
 
 class TradingQueryRepository:
@@ -14,6 +14,20 @@ class TradingQueryRepository:
         """
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+
+    def is_available(self) -> bool:
+        """Check whether the configured database exists and can be read.
+
+        @returns: True when a read-only connection succeeds.
+        """
+        if not get_database_path(self.db_path).exists():
+            return False
+        try:
+            with get_read_connection(self.db_path) as connection:
+                connection.execute("SELECT 1").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
 
     def get_orders(self, trade_date: str) -> list[dict[str, Any]]:
         """Return orders saved for one trade date.
@@ -79,16 +93,25 @@ class TradingQueryRepository:
         rows.reverse()
         return rows
 
-    def get_latest_account_snapshot(self) -> dict[str, Any] | None:
+    def get_latest_account_snapshot(self, trade_date: str | None = None) -> dict[str, Any] | None:
         """Return the most recently saved account snapshot.
 
+        @param trade_date: Optional date in YYYY-MM-DD format.
         @returns: Latest account snapshot row, or None when unavailable.
         """
-        rows = self._fetch_all(
-            "SELECT * FROM account_snapshots ORDER BY recorded_at DESC, id DESC LIMIT 1",
-            (),
-            "get_latest_account_snapshot",
-        )
+        if trade_date is None:
+            sql = "SELECT * FROM account_snapshots ORDER BY recorded_at DESC, id DESC LIMIT 1"
+            params = ()
+        else:
+            sql = """
+                SELECT *
+                FROM account_snapshots
+                WHERE trade_date = ?
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT 1
+            """
+            params = (trade_date,)
+        rows = self._fetch_all(sql, params, "get_latest_account_snapshot")
         return rows[0] if rows else None
 
     def _fetch_all(self, sql: str, params: tuple[Any, ...], operation: str) -> list[dict[str, Any]]:

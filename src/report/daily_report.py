@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.config.bot_config import load_bot_config
+from src.config.strategy_metadata import create_strategy_metadata
 from src.db.repository import TradingRepository
 from src.report.missed_trade_analyzer import analyze_missed_candidates
 from src.report.report_analyzer import analyze_trades
@@ -26,11 +27,20 @@ def run_report_command(argv: list[str] | None = None) -> int:
     log_path = Path(args.log_path) if args.log_path is not None else get_default_log_path(report_date)
     events = parse_log_file(log_path)
     bot_config = load_bot_config()
-    execution_rows = TradingRepository().get_executions(report_date)
+    repository = TradingRepository()
+    execution_rows = repository.get_executions(report_date)
+    account_snapshot = repository.get_latest_account_snapshot(report_date)
     analysis_events = _replace_order_events_with_executions(events, execution_rows)
     analysis = analyze_trades(analysis_events, bot_config.cost)
     missed_candidates = analyze_missed_candidates(events, bot_config)
-    report_path = write_report(report_date, analysis, missed_candidates, args.save)
+    report_path = write_report(
+        report_date,
+        analysis,
+        missed_candidates,
+        args.save,
+        account_snapshot=account_snapshot,
+        strategy_metadata=create_strategy_metadata(bot_config),
+    )
     if report_path is not None:
         print(f"Report saved: {report_path}")
     elif not events:

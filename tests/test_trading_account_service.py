@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+from datetime import datetime
 
 from src.runner.auto_trading_state import AutoTradingState
 from src.services.trading_account_service import TradingAccountService
@@ -62,3 +63,158 @@ def test_account_service_activates_safe_mode_when_balance_sync_fails():
 
     assert result is False
     activate_safe_mode.assert_called_once_with("BALANCE_SYNC_FAILED", None)
+
+
+def test_account_service_marks_order_filled_from_execution():
+    repository = Mock()
+    repository.get_active_orders.return_value = [
+        {
+            "id": 1,
+            "order_id": "123",
+            "symbol": "005930",
+            "side": "BUY",
+            "created_at": "2026-06-23 09:30:00",
+        }
+    ]
+    service = _service(repository=repository)
+
+    service.reconcile_order_states(
+        [],
+        [{"odno": "123", "pdno": "005930", "sll_buy_dvsn_cd": "02"}],
+        AutoTradingState(),
+        now=datetime(2026, 6, 23, 9, 30, 10),
+    )
+
+    repository.update_order_status.assert_called_once_with(
+        order_row_id=1,
+        order_id="123",
+        status="FILLED",
+        reason=None,
+    )
+
+
+def test_account_service_marks_recent_open_order():
+    repository = Mock()
+    repository.get_active_orders.return_value = [
+        {
+            "id": 1,
+            "order_id": "123",
+            "symbol": "005930",
+            "side": "BUY",
+            "created_at": "2026-06-23 09:30:00",
+        }
+    ]
+    service = _service(repository=repository)
+
+    service.reconcile_order_states(
+        [{"odno": "123", "pdno": "005930", "sll_buy_dvsn_cd": "02"}],
+        [],
+        AutoTradingState(),
+        now=datetime(2026, 6, 23, 9, 30, 10),
+    )
+
+    repository.update_order_status.assert_called_once_with(
+        order_row_id=1,
+        order_id="123",
+        status="OPEN",
+        reason=None,
+    )
+
+
+def test_account_service_marks_partial_execution_as_partially_filled():
+    repository = Mock()
+    repository.get_active_orders.return_value = [
+        {
+            "id": 1,
+            "order_id": "123",
+            "symbol": "005930",
+            "side": "BUY",
+            "created_at": "2026-06-23 09:30:00",
+        }
+    ]
+    service = _service(repository=repository)
+
+    service.reconcile_order_states(
+        [{"odno": "123", "pdno": "005930", "sll_buy_dvsn_cd": "02"}],
+        [{"odno": "123", "pdno": "005930", "sll_buy_dvsn_cd": "02"}],
+        AutoTradingState(),
+        now=datetime(2026, 6, 23, 9, 30, 10),
+    )
+
+    repository.update_order_status.assert_called_once_with(
+        order_row_id=1,
+        order_id="123",
+        status="PARTIALLY_FILLED",
+        reason=None,
+    )
+
+
+def test_account_service_saves_broker_pnl_difference():
+    account = Mock()
+    account.get_account_summary.return_value = {
+        "dnca_tot_amt": "500000",
+        "scts_evlu_amt": "100000",
+        "tot_evlu_amt": "600000",
+        "evlu_pfls_smtl_amt": "1000",
+    }
+    account.get_available_cash.return_value = 490000
+    account.get_daily_realized_pnl.return_value = 800
+    repository = Mock()
+    repository.get_cumulative_execution_cost.return_value = 150
+    state = AutoTradingState(daily_realized_pnl=750)
+
+    _service(account=account, repository=repository).save_account_snapshot(state, force=True)
+
+    assert repository.insert_account_snapshot.call_args.kwargs["broker_daily_realized_pnl"] == 800
+    assert repository.insert_account_snapshot.call_args.kwargs["realized_pnl_difference"] == -50
+
+
+def test_account_service_blocks_trading_for_unfilled_timeout():
+    repository = Mock()
+    repository.get_active_orders.return_value = [
+        {
+            "id": 1,
+            "order_id": "123",
+            "symbol": "005930",
+            "side": "BUY",
+            "created_at": "2026-06-23 09:30:00",
+        }
+    ]
+    activate_safe_mode = Mock()
+    service = _service(repository=repository, activate_safe_mode=activate_safe_mode)
+
+    service.reconcile_order_states(
+        [{"odno": "123", "pdno": "005930", "sll_buy_dvsn_cd": "02"}],
+        [],
+        AutoTradingState(),
+        now=datetime(2026, 6, 23, 9, 31),
+    )
+
+    assert repository.update_order_status.call_args.kwargs["status"] == "UNFILLED_TIMEOUT"
+    activate_safe_mode.assert_called_once()
+    assert activate_safe_mode.call_args.args[0] == "UNFILLED_TIMEOUT"
+
+
+def test_account_service_blocks_trading_for_missing_stale_order():
+    repository = Mock()
+    repository.get_active_orders.return_value = [
+        {
+            "id": 1,
+            "order_id": "123",
+            "symbol": "005930",
+            "side": "SELL",
+            "created_at": "2026-06-23 09:30:00",
+        }
+    ]
+    activate_safe_mode = Mock()
+    service = _service(repository=repository, activate_safe_mode=activate_safe_mode)
+
+    service.reconcile_order_states(
+        [],
+        [],
+        AutoTradingState(),
+        now=datetime(2026, 6, 23, 9, 31),
+    )
+
+    assert repository.update_order_status.call_args.kwargs["status"] == "RECONCILIATION_REQUIRED"
+    assert activate_safe_mode.call_args.args[0] == "RECONCILIATION_REQUIRED"

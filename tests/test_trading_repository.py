@@ -169,6 +169,32 @@ def test_repository_reads_orders_and_executions_by_trade_date(tmp_path):
     assert repository.get_orders("2026-06-24") == []
 
 
+def test_repository_returns_only_active_orders(tmp_path):
+    repository = TradingRepository(tmp_path / "trading.db")
+    created_at = datetime(2026, 6, 23, 9, 30)
+    active_id = repository.insert_order(
+        symbol="005930",
+        side="BUY",
+        quantity=1,
+        order_type="MARKET",
+        status="ACCEPTED",
+        created_at=created_at,
+    )
+    filled_id = repository.insert_order(
+        symbol="000660",
+        side="BUY",
+        quantity=1,
+        order_type="MARKET",
+        status="ACCEPTED",
+        created_at=created_at,
+    )
+    repository.update_order_status(order_row_id=filled_id, status="FILLED")
+
+    rows = repository.get_active_orders("2026-06-23")
+
+    assert [row["id"] for row in rows] == [active_id]
+
+
 def test_repository_inserts_and_reads_bot_events(tmp_path):
     repository = TradingRepository(tmp_path / "trading.db")
     repository.insert_bot_event(
@@ -224,16 +250,22 @@ def test_repository_inserts_account_snapshot_and_reads_cumulative_cost(tmp_path)
         unrealized_pnl=1000,
         daily_realized_pnl=-500,
         cumulative_cost=150,
+        broker_daily_realized_pnl=-450,
+        realized_pnl_difference=-50,
         recorded_at=datetime(2026, 6, 18, 9, 5),
     )
 
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
-            "SELECT total_asset, cumulative_cost FROM account_snapshots WHERE id = ?",
+            """
+            SELECT total_asset, cumulative_cost, broker_daily_realized_pnl, realized_pnl_difference
+            FROM account_snapshots
+            WHERE id = ?
+            """,
             (snapshot_id,),
         ).fetchone()
 
-    assert row == (600000.0, 150.0)
+    assert row == (600000.0, 150.0, -450.0, -50.0)
     assert repository.get_cumulative_execution_cost("2026-06-18") == 150.0
 
 
