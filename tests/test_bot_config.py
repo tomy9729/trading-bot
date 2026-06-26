@@ -28,6 +28,19 @@ def test_domestic_entry_window_is_continuous():
     assert bot_config.korea.entry_windows == (("09:10", "15:00"),)
 
 
+def test_trading_safety_tuning_defaults_are_loaded():
+    bot_config = load_bot_config()
+
+    assert bot_config.strategy.max_breakout_chase_percent == 0.8
+    assert bot_config.risk.volume_drop_exit_min_hold_minutes == 2.0
+    assert bot_config.risk.profit_protection_min_profit_amount == 0
+    assert bot_config.risk.profit_protection_min_hold_minutes == 2.0
+    assert bot_config.risk.profit_protection_weak_signal_count == 2
+    assert bot_config.risk.profit_protection_max_execution_strength == 30.0
+    assert bot_config.risk.profit_protection_min_volume_multiplier == 1.0
+    assert bot_config.risk.profit_protection_upper_wick_percent == 80.0
+
+
 def test_bot_config_rejects_invalid_stop_loss():
     bot_config = load_bot_config()
     invalid_config = replace(bot_config, risk=replace(bot_config.risk, stop_loss_percent=0.5))

@@ -45,13 +45,16 @@ class SymbolFilter:
         @param snapshot: Current market snapshot.
         @returns: Filter result.
         """
+        upper_wick_details = {
+            "upper_wick_rate": snapshot.upper_wick_rate,
+            "max_upper_wick_percent": self.bot_config.strategy.max_upper_wick_percent,
+            "upper_wick_excess_percent": max(0.0, snapshot.upper_wick_rate - self.bot_config.strategy.max_upper_wick_percent),
+        }
         if snapshot.spread_rate > self.bot_config.strategy.max_spread_percent:
             return FilterResult(False, "SPREAD_TOO_WIDE", {"spread_rate": snapshot.spread_rate})
         if snapshot.upper_wick_rate > self.bot_config.strategy.max_upper_wick_percent:
-            return FilterResult(False, "UPPER_WICK_TOO_LONG", {"upper_wick_rate": snapshot.upper_wick_rate})
-        if snapshot.volume_declining:
-            return FilterResult(False, "VOLUME_DECLINING", {"volume_declining": True})
-        return FilterResult(True, "OK", {"spread_rate": snapshot.spread_rate, "upper_wick_rate": snapshot.upper_wick_rate})
+            return FilterResult(False, "UPPER_WICK_TOO_LONG", upper_wick_details)
+        return FilterResult(True, "OK", {"spread_rate": snapshot.spread_rate, **upper_wick_details})
 
 
 class EntrySignal:
@@ -139,9 +142,28 @@ class EntrySignal:
         first_failed_reason = _append_condition_result(
             matched_conditions,
             failed_conditions,
+            "BREAKOUT_VOLUME_SUSTAINED",
+            not snapshot.volume_declining,
+            "VOLUME_DECLINING",
+            first_failed_reason,
+        )
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
             "PRICE_BREAKOUT",
             snapshot.current_price > snapshot.recent_high,
             "BREAKOUT_FAILED",
+            first_failed_reason,
+        )
+        breakout_chase_rate = _rate_gap(snapshot.current_price, snapshot.recent_high)
+        details["breakout_chase_rate"] = breakout_chase_rate
+        details["max_breakout_chase_percent"] = self.bot_config.strategy.max_breakout_chase_percent
+        first_failed_reason = _append_condition_result(
+            matched_conditions,
+            failed_conditions,
+            "CHASE_LIMIT",
+            breakout_chase_rate is None or breakout_chase_rate <= self.bot_config.strategy.max_breakout_chase_percent,
+            "CHASE_PRICE_TOO_HIGH",
             first_failed_reason,
         )
         first_failed_reason = _append_condition_result(
@@ -212,6 +234,17 @@ class ExitSignal:
         profit_rate = trade_result.net_return_rate
         profit_amount = trade_result.net_profit_loss
         hold_minutes = (current_time - position.entry_time).total_seconds() / 60
+        volume_multiplier = calculate_volume_multiplier(
+            snapshot.one_minute_volume,
+            snapshot.previous_five_minute_average_volume,
+        )
+        profit_protection_signals = _profit_protection_signals(
+            snapshot,
+            volume_multiplier,
+            self.bot_config.risk.profit_protection_max_execution_strength,
+            self.bot_config.risk.profit_protection_min_volume_multiplier,
+            self.bot_config.risk.profit_protection_upper_wick_percent,
+        )
         details = _entry_details(snapshot)
         details.update(
             {
@@ -229,7 +262,14 @@ class ExitSignal:
                 "estimated_sell_tax": trade_result.sell_tax,
                 "estimated_slippage_cost": trade_result.slippage_cost,
                 "estimated_total_cost": trade_result.total_cost,
+                "volume_multiplier": volume_multiplier,
                 "hold_minutes": hold_minutes,
+                "volume_drop_exit_min_hold_minutes": self.bot_config.risk.volume_drop_exit_min_hold_minutes,
+                "profit_protection_min_profit_amount": self.bot_config.risk.profit_protection_min_profit_amount,
+                "profit_protection_min_hold_minutes": self.bot_config.risk.profit_protection_min_hold_minutes,
+                "profit_protection_weak_signal_count": self.bot_config.risk.profit_protection_weak_signal_count,
+                "profit_protection_signals": tuple(profit_protection_signals),
+                "profit_protection_signal_count": len(profit_protection_signals),
                 "stop_loss_price": position.average_price * (1 + (self.bot_config.risk.stop_loss_percent / 100)),
                 "take_profit_price": position.average_price * (1 + (self.bot_config.risk.take_profit_percent / 100)),
             }
@@ -261,6 +301,15 @@ class ExitSignal:
         first_exit_reason = _append_exit_condition_result(
             matched_conditions,
             failed_conditions,
+            "PROFIT_PROTECTION_EXIT",
+            profit_amount > self.bot_config.risk.profit_protection_min_profit_amount
+            and hold_minutes >= self.bot_config.risk.profit_protection_min_hold_minutes
+            and len(profit_protection_signals) >= self.bot_config.risk.profit_protection_weak_signal_count,
+            first_exit_reason,
+        )
+        first_exit_reason = _append_exit_condition_result(
+            matched_conditions,
+            failed_conditions,
             "TIME_STOP_NO_MOMENTUM",
             hold_minutes >= self.bot_config.risk.stale_position_minutes and profit_rate < self.bot_config.risk.stale_position_min_profit_percent,
             first_exit_reason,
@@ -269,7 +318,10 @@ class ExitSignal:
             matched_conditions,
             failed_conditions,
             "VOLUME_DROPPED_AFTER_BREAKOUT",
-            snapshot.volume_declining and snapshot.current_price <= snapshot.recent_high,
+            snapshot.volume_declining
+            and snapshot.current_price <= snapshot.recent_high
+            and trade_result.net_profit_loss > 0
+            and hold_minutes >= self.bot_config.risk.volume_drop_exit_min_hold_minutes,
             first_exit_reason,
         )
         first_exit_reason = _append_exit_condition_result(
@@ -319,6 +371,27 @@ def _entry_details(snapshot: MarketSnapshot) -> dict[str, Any]:
         "market_direction_rate": snapshot.market_direction_rate,
         "volume_declining": snapshot.volume_declining,
     }
+
+
+def _profit_protection_signals(
+    snapshot: MarketSnapshot,
+    volume_multiplier: float,
+    max_execution_strength: float,
+    min_volume_multiplier: float,
+    upper_wick_percent: float,
+) -> list[str]:
+    signals = []
+    if snapshot.execution_strength < max_execution_strength:
+        signals.append("EXECUTION_STRENGTH_WEAK")
+    if snapshot.upper_wick_rate >= upper_wick_percent:
+        signals.append("UPPER_WICK_TOO_LONG")
+    if volume_multiplier < min_volume_multiplier:
+        signals.append("VOLUME_WEAK")
+    if snapshot.market_direction_rate < 0:
+        signals.append("MARKET_DIRECTION_WEAK")
+    if snapshot.current_price <= snapshot.recent_high:
+        signals.append("BREAKOUT_NOT_HELD")
+    return signals
 
 
 def _append_condition_result(

@@ -34,6 +34,7 @@ class StrategyConfig:
     max_upper_wick_percent: float
     market_down_block_threshold_percent: float
     vwap_entry_price_ratio: float = 1.0
+    max_breakout_chase_percent: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,13 @@ class RiskConfig:
     stale_position_min_profit_percent: float
     unfilled_order_timeout_seconds: int
     reentry_cooldown_minutes: int
+    volume_drop_exit_min_hold_minutes: float = 2.0
+    profit_protection_min_profit_amount: float = 0.0
+    profit_protection_min_hold_minutes: float = 2.0
+    profit_protection_weak_signal_count: int = 2
+    profit_protection_max_execution_strength: float = 30.0
+    profit_protection_min_volume_multiplier: float = 1.0
+    profit_protection_upper_wick_percent: float = 80.0
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,7 @@ def load_bot_config(path: str | Path | None = None) -> BotConfig:
             max_upper_wick_percent=_get_float_env("MAX_UPPER_WICK_PERCENT", float(strategy.get("max_upper_wick_percent", 45.0))),
             market_down_block_threshold_percent=float(strategy.get("market_down_block_threshold_percent", -0.5)),
             vwap_entry_price_ratio=_get_positive_float_env("VWAP_ENTRY_PRICE_RATIO", 1.0),
+            max_breakout_chase_percent=float(strategy.get("max_breakout_chase_percent", 0.8)),
         ),
         risk=RiskConfig(
             enforce_daily_loss_limit=bool(risk.get("enforce_daily_loss_limit", True)),
@@ -152,6 +161,13 @@ def load_bot_config(path: str | Path | None = None) -> BotConfig:
             stale_position_min_profit_percent=float(risk.get("stale_position_min_profit_percent", 0.5)),
             unfilled_order_timeout_seconds=int(risk.get("unfilled_order_timeout_seconds", 30)),
             reentry_cooldown_minutes=int(risk.get("reentry_cooldown_minutes", 15)),
+            volume_drop_exit_min_hold_minutes=float(risk.get("volume_drop_exit_min_hold_minutes", 2.0)),
+            profit_protection_min_profit_amount=float(risk.get("profit_protection_min_profit_amount", 0.0)),
+            profit_protection_min_hold_minutes=float(risk.get("profit_protection_min_hold_minutes", 2.0)),
+            profit_protection_weak_signal_count=int(risk.get("profit_protection_weak_signal_count", 2)),
+            profit_protection_max_execution_strength=float(risk.get("profit_protection_max_execution_strength", 30.0)),
+            profit_protection_min_volume_multiplier=float(risk.get("profit_protection_min_volume_multiplier", 1.0)),
+            profit_protection_upper_wick_percent=float(risk.get("profit_protection_upper_wick_percent", 80.0)),
         ),
         cost=TradingCostConfig(
             buy_fee_percent=float(cost.get("buy_fee_percent", 0.015)),
@@ -201,6 +217,20 @@ def validate_bot_config(bot_config: BotConfig) -> None:
         raise ValueError("risk.partial_take_profit_ratio must be greater than 0 and less than or equal to 1")
     if bot_config.risk.reentry_cooldown_minutes < 0:
         raise ValueError("risk.reentry_cooldown_minutes must be greater than or equal to 0")
+    if bot_config.risk.volume_drop_exit_min_hold_minutes < 0:
+        raise ValueError("risk.volume_drop_exit_min_hold_minutes must be greater than or equal to 0")
+    if bot_config.risk.profit_protection_min_profit_amount < 0:
+        raise ValueError("risk.profit_protection_min_profit_amount must be greater than or equal to 0")
+    if bot_config.risk.profit_protection_min_hold_minutes < 0:
+        raise ValueError("risk.profit_protection_min_hold_minutes must be greater than or equal to 0")
+    if bot_config.risk.profit_protection_weak_signal_count <= 0:
+        raise ValueError("risk.profit_protection_weak_signal_count must be greater than 0")
+    if bot_config.risk.profit_protection_max_execution_strength < 0:
+        raise ValueError("risk.profit_protection_max_execution_strength must be greater than or equal to 0")
+    if bot_config.risk.profit_protection_min_volume_multiplier < 0:
+        raise ValueError("risk.profit_protection_min_volume_multiplier must be greater than or equal to 0")
+    if bot_config.risk.profit_protection_upper_wick_percent < 0:
+        raise ValueError("risk.profit_protection_upper_wick_percent must be greater than or equal to 0")
     if bot_config.cost.buy_fee_percent < 0:
         raise ValueError("cost.buy_fee_percent must be greater than or equal to 0")
     if bot_config.cost.sell_fee_percent < 0:
@@ -213,6 +243,8 @@ def validate_bot_config(bot_config: BotConfig) -> None:
         raise ValueError("strategy.volume_multiplier must be greater than 0")
     if bot_config.strategy.vwap_entry_price_ratio <= 0:
         raise ValueError("strategy.vwap_entry_price_ratio must be greater than 0")
+    if bot_config.strategy.max_breakout_chase_percent < 0:
+        raise ValueError("strategy.max_breakout_chase_percent must be greater than or equal to 0")
     if bot_config.strategy.volume_lookback_minutes <= 0:
         raise ValueError("strategy.volume_lookback_minutes must be greater than 0")
     if bot_config.strategy.breakout_window_minutes <= 0:

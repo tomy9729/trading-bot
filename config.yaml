@@ -22,6 +22,7 @@ strategy:
     max_spread_percent: 0.3
     max_upper_wick_percent: 45.0
     market_down_block_threshold_percent: -0.5
+    max_breakout_chase_percent: 0.8
 
 risk:
     enforce_daily_loss_limit: false
@@ -36,6 +37,13 @@ risk:
     break_even_stop_percent: 0.0
     stale_position_minutes: 5
     stale_position_min_profit_percent: 0.5
+    volume_drop_exit_min_hold_minutes: 2.0
+    profit_protection_min_profit_amount: 0
+    profit_protection_min_hold_minutes: 2.0
+    profit_protection_weak_signal_count: 2
+    profit_protection_max_execution_strength: 30.0
+    profit_protection_min_volume_multiplier: 1.0
+    profit_protection_upper_wick_percent: 80.0
     unfilled_order_timeout_seconds: 30
     reentry_cooldown_minutes: 15
 
