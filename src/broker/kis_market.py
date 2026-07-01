@@ -24,6 +24,31 @@ class KisMarket:
             raise RuntimeError(f"KIS current price response missing output.stck_prpr: {response}")
         return int(str(output["stck_prpr"]).replace(",", ""))
 
+    def get_current_index(self, index_code: str, market_div_code: str = "U") -> dict[str, Any]:
+        """Fetch the current domestic index value.
+
+        @param index_code: KIS domestic index code.
+        @param market_div_code: KIS market division code, usually U for index/upjong APIs.
+        @returns: Dict with current_value, change, change_rate, and raw output.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/quotations/inquire-index-price",
+            "FHPUP02100000",
+            {"FID_COND_MRKT_DIV_CODE": market_div_code, "FID_INPUT_ISCD": index_code},
+        )
+        output = response.get("output")
+        if not isinstance(output, dict) or "bstp_nmix_prpr" not in output:
+            raise RuntimeError(f"KIS current index response missing output.bstp_nmix_prpr: {response}")
+        current_value = _to_float(output["bstp_nmix_prpr"])
+        if current_value <= 0:
+            raise RuntimeError(f"KIS current index returned non-positive value: index_code={index_code}, response={response}")
+        return {
+            "current_value": current_value,
+            "change": _to_float(output.get("bstp_nmix_prdy_vrss", 0)),
+            "change_rate": _to_float(output.get("bstp_nmix_prdy_ctrt", 0)),
+            "raw": output,
+        }
+
     def get_orderbook(self, symbol: str) -> dict[str, Any]:
         """Fetch best bid/ask and spread rate for a domestic stock.
 
@@ -75,6 +100,60 @@ class KisMarket:
             raise RuntimeError(f"KIS minute chart response missing output2 list: {response}")
         return output
 
+    def get_time_index_chart(
+        self,
+        index_code: str,
+        interval_seconds: str = "60",
+        market_div_code: str = "U",
+    ) -> list[dict[str, Any]]:
+        """Fetch domestic index intraday chart rows.
+
+        @param index_code: KIS domestic index code.
+        @param interval_seconds: Aggregation unit such as 30, 60, 600, or 3600.
+        @param market_div_code: KIS market division code, usually U for index/upjong APIs.
+        @returns: KIS index intraday chart rows.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice",
+            "FHKUP03500200",
+            {
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": index_code,
+                "FID_INPUT_HOUR_1": interval_seconds,
+                "FID_PW_DATA_INCU_YN": "Y",
+                "FID_ETC_CLS_CODE": "0",
+            },
+        )
+        return _get_non_empty_output2(response, f"KIS time index chart returned no rows: index_code={index_code}")
+
+    def get_daily_index_chart(
+        self,
+        index_code: str,
+        start_date: str,
+        end_date: str,
+        market_div_code: str = "U",
+    ) -> list[dict[str, Any]]:
+        """Fetch domestic index daily chart rows.
+
+        @param index_code: KIS domestic index code.
+        @param start_date: Start date as YYYYMMDD.
+        @param end_date: End date as YYYYMMDD.
+        @param market_div_code: KIS market division code, usually U for index/upjong APIs.
+        @returns: KIS index daily chart rows.
+        """
+        response = self.client.get(
+            "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+            "FHKUP03500100",
+            {
+                "FID_COND_MRKT_DIV_CODE": market_div_code,
+                "FID_INPUT_ISCD": index_code,
+                "FID_INPUT_DATE_1": start_date,
+                "FID_INPUT_DATE_2": end_date,
+                "FID_PERIOD_DIV_CODE": "D",
+            },
+        )
+        return _get_non_empty_output2(response, f"KIS daily index chart returned no rows: index_code={index_code}")
+
     def get_trading_value_rank(self, limit: int = 50) -> list[dict[str, Any]]:
         """Fetch domestic stock ranking sorted by trading amount.
 
@@ -110,3 +189,18 @@ def _to_int(value: Any) -> int:
     if value == "":
         return 0
     return int(str(value).replace(",", ""))
+
+
+def _to_float(value: Any) -> float:
+    if value is None:
+        raise RuntimeError("KIS numeric value is missing")
+    if value == "":
+        return 0.0
+    return float(str(value).replace(",", ""))
+
+
+def _get_non_empty_output2(response: dict[str, Any], message: str) -> list[dict[str, Any]]:
+    output = response.get("output2")
+    if not isinstance(output, list) or not output:
+        raise RuntimeError(f"{message}, response={response}")
+    return output
