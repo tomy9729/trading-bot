@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from src.broker.kis_client import KisApiError
 from src.config.bot_config import BotConfig

@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import time
-from typing import Dict, Set
 
 from src.config import strategy_config
 from src.config.env import Settings
@@ -14,10 +13,10 @@ class RiskState:
     consecutive_loss_count: int = 0
     safe_mode: bool = False
     kill_switch_active: bool = False
-    daily_entry_count_by_symbol: Dict[str, int] = field(default_factory=dict)
-    pending_order_symbols: Set[str] = field(default_factory=set)
-    order_locked_symbols: Set[str] = field(default_factory=set)
-    held_symbols: Set[str] = field(default_factory=set)
+    daily_entry_count_by_symbol: dict[str, int] = field(default_factory=dict)
+    pending_order_symbols: set[str] = field(default_factory=set)
+    order_locked_symbols: set[str] = field(default_factory=set)
+    held_symbols: set[str] = field(default_factory=set)
 
 
 class RiskManager:

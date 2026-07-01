@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
@@ -9,7 +9,7 @@ from src.logs.trade_logger import get_trade_logger
 
 
 class KisApiError(RuntimeError):
-    def __init__(self, tr_id: str, status_code: int, response: Dict[str, Any]):
+    def __init__(self, tr_id: str, status_code: int, response: dict[str, Any]):
         self.tr_id = tr_id
         self.status_code = status_code
         self.response = response
@@ -28,14 +28,14 @@ class KisClient:
     RATE_LIMIT_ERROR_CODES = {"EGW00201", "EGW00215"}
     AUTH_ERROR_CODES = {"EGW00123", "EGW00121", "EGW00110", "EGW00111", "EGW00112"}
 
-    def __init__(self, settings: Settings, session: Optional[requests.Session] = None):
+    def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
         self.session = session or requests.Session()
         self.auth = KisAuth(settings, self.session)
         self.logger = get_trade_logger()
         self._last_request_at = 0.0
 
-    def get(self, path: str, tr_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    def get(self, path: str, tr_id: str, params: dict[str, Any]) -> dict[str, Any]:
         """Call a KIS GET endpoint.
 
         @param path: API path beginning with /.
@@ -45,7 +45,7 @@ class KisClient:
         """
         return self._request("GET", path, tr_id, params=params)
 
-    def post(self, path: str, tr_id: str, payload: Dict[str, Any], use_hashkey: bool = False) -> Dict[str, Any]:
+    def post(self, path: str, tr_id: str, payload: dict[str, Any], use_hashkey: bool = False) -> dict[str, Any]:
         """Call a KIS POST endpoint.
 
         @param path: API path beginning with /.
@@ -59,7 +59,7 @@ class KisClient:
             headers["hashkey"] = self.create_hashkey(payload)
         return self._request("POST", path, tr_id, payload=payload, extra_headers=headers)
 
-    def create_hashkey(self, payload: Dict[str, Any]) -> str:
+    def create_hashkey(self, payload: dict[str, Any]) -> str:
         """Create a KIS hashkey for POST request bodies.
 
         @param payload: JSON request payload.
@@ -84,10 +84,10 @@ class KisClient:
         method: str,
         path: str,
         tr_id: str,
-        params: Optional[Dict[str, Any]] = None,
-        payload: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         url = f"{self.settings.base_url}{path}"
 
         last_response = None
@@ -137,7 +137,7 @@ class KisClient:
         status_code, data = last_response or (0, {})
         raise KisApiError(tr_id, status_code, data)
 
-    def _is_auth_error(self, status_code: int, data: Dict[str, Any]) -> bool:
+    def _is_auth_error(self, status_code: int, data: dict[str, Any]) -> bool:
         if status_code in {401, 403}:
             return True
         return str(data.get("msg_cd") or "") in self.AUTH_ERROR_CODES
@@ -153,7 +153,7 @@ class KisClient:
         self._last_request_at = time.monotonic()
 
 
-def _read_json(response: requests.Response) -> Dict[str, Any]:
+def _read_json(response: requests.Response) -> dict[str, Any]:
     try:
         data = response.json()
     except ValueError as exc:

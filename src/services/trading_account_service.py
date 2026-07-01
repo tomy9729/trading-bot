@@ -1,6 +1,7 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from src.broker.kis_account import KisAccount
 from src.config.bot_config import BotConfig, TradingCostConfig

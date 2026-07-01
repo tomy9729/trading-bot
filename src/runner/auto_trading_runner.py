@@ -1,7 +1,8 @@
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from src.broker.kis_account import KisAccount
 from src.broker.kis_market import KisMarket

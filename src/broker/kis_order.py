@@ -1,5 +1,5 @@
-from datetime import datetime, time
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any
 
 from src.broker.kis_client import KisClient
 from src.domain.order import OrderRequest, OrderResult
@@ -18,7 +18,7 @@ class KisOrder:
         self.market_hours = market_hours or MarketHours()
         self.logger = get_trade_logger()
 
-    def buy_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
+    def buy_market(self, symbol: str, quantity: int) -> dict[str, Any]:
         """Place a domestic stock market buy order.
 
         @param symbol: Six-digit domestic stock code.
@@ -27,7 +27,7 @@ class KisOrder:
         """
         return self._market_order("BUY", symbol, quantity).response
 
-    def sell_market(self, symbol: str, quantity: int) -> Dict[str, Any]:
+    def sell_market(self, symbol: str, quantity: int) -> dict[str, Any]:
         """Place a domestic stock market sell order.
 
         @param symbol: Six-digit domestic stock code.

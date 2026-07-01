@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from src.config.bot_config import TradingCostConfig

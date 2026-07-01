@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from src.config.bot_config import StrategyConfig
 from src.domain.market_data import MarketSnapshot, MinuteCandle

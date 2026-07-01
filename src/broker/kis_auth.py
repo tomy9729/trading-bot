@@ -2,7 +2,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
@@ -20,10 +20,10 @@ class AccessToken:
 
 
 class KisAuth:
-    def __init__(self, settings: Settings, session: Optional[requests.Session] = None):
+    def __init__(self, settings: Settings, session: requests.Session | None = None):
         self.settings = settings
         self.session = session or requests.Session()
-        self._token: Optional[AccessToken] = None
+        self._token: AccessToken | None = None
         self._cache_path = get_token_cache_path()
 
     def get_access_token(self) -> str:
@@ -62,7 +62,7 @@ class KisAuth:
         """Clear the in-memory access token after an authentication failure."""
         self._token = None
 
-    def _load_cached_token(self) -> Optional[AccessToken]:
+    def _load_cached_token(self) -> AccessToken | None:
         if not self._cache_path.exists():
             return None
         try:
@@ -90,7 +90,7 @@ class KisAuth:
         return hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
 
 
-def _read_json(response: requests.Response) -> Dict[str, Any]:
+def _read_json(response: requests.Response) -> dict[str, Any]:
     try:
         data = response.json()
     except ValueError as exc:

@@ -1,4 +1,4 @@
-from typing import Sequence
+from collections.abc import Sequence
 
 from src.domain.market_data import MinuteCandle
 

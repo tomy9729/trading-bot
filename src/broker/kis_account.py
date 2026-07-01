@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from src.broker.kis_client import KisClient
 
@@ -7,7 +7,7 @@ class KisAccount:
     def __init__(self, client: KisClient):
         self.client = client
 
-    def get_balance(self) -> List[Dict[str, Any]]:
+    def get_balance(self) -> list[dict[str, Any]]:
         """Fetch domestic stock account positions.
 
         @returns: KIS balance output list.
@@ -22,7 +22,7 @@ class KisAccount:
             raise RuntimeError(f"KIS balance response missing output1 list: {response}")
         return output
 
-    def get_account_summary(self) -> Dict[str, Any]:
+    def get_account_summary(self) -> dict[str, Any]:
         """Fetch domestic account-level asset summary.
 
         @returns: KIS balance output2 summary row.
@@ -91,7 +91,7 @@ class KisAccount:
         quantity = output.get("max_buy_qty") or output.get("nrcvb_buy_qty") or "0"
         return int(str(quantity).replace(",", ""))
 
-    def get_open_orders(self) -> List[Dict[str, Any]]:
+    def get_open_orders(self) -> list[dict[str, Any]]:
         """Fetch domestic open orders.
 
         @returns: KIS open order rows.
@@ -106,7 +106,7 @@ class KisAccount:
             raise RuntimeError(f"KIS open orders response missing output list: {response}")
         return output
 
-    def get_today_executions(self) -> List[Dict[str, Any]]:
+    def get_today_executions(self) -> list[dict[str, Any]]:
         """Fetch today's domestic order executions.
 
         @returns: KIS execution rows.
@@ -161,7 +161,7 @@ class KisAccount:
     def _daily_pnl_tr_id(self) -> str:
         return "VTTC8715R" if self.client.settings.kis_is_mock else "TTTC8715R"
 
-    def _balance_params(self) -> Dict[str, str]:
+    def _balance_params(self) -> dict[str, str]:
         return {
             "CANO": self.client.settings.kis_account_no,
             "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
@@ -176,7 +176,7 @@ class KisAccount:
             "CTX_AREA_NK100": "",
         }
 
-    def _open_orders_params(self) -> Dict[str, str]:
+    def _open_orders_params(self) -> dict[str, str]:
         return {
             "CANO": self.client.settings.kis_account_no,
             "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
@@ -186,7 +186,7 @@ class KisAccount:
             "INQR_DVSN_2": "0",
         }
 
-    def _daily_executions_params(self) -> Dict[str, str]:
+    def _daily_executions_params(self) -> dict[str, str]:
         return {
             "CANO": self.client.settings.kis_account_no,
             "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,
@@ -204,7 +204,7 @@ class KisAccount:
             "CTX_AREA_NK100": "",
         }
 
-    def _daily_pnl_params(self) -> Dict[str, str]:
+    def _daily_pnl_params(self) -> dict[str, str]:
         return {
             "CANO": self.client.settings.kis_account_no,
             "ACNT_PRDT_CD": self.client.settings.kis_account_product_code,

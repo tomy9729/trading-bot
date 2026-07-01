@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
 from src.broker.kis_client import KisClient
 
@@ -24,7 +24,7 @@ class KisMarket:
             raise RuntimeError(f"KIS current price response missing output.stck_prpr: {response}")
         return int(str(output["stck_prpr"]).replace(",", ""))
 
-    def get_orderbook(self, symbol: str) -> Dict[str, Any]:
+    def get_orderbook(self, symbol: str) -> dict[str, Any]:
         """Fetch best bid/ask and spread rate for a domestic stock.
 
         @param symbol: Six-digit domestic stock code.
@@ -53,7 +53,7 @@ class KisMarket:
             "spread_rate": spread_rate,
         }
 
-    def get_minute_chart(self, symbol: str) -> List[Dict[str, Any]]:
+    def get_minute_chart(self, symbol: str) -> list[dict[str, Any]]:
         """Fetch domestic same-day minute candles.
 
         @param symbol: Six-digit domestic stock code.
@@ -75,7 +75,7 @@ class KisMarket:
             raise RuntimeError(f"KIS minute chart response missing output2 list: {response}")
         return output
 
-    def get_trading_value_rank(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_trading_value_rank(self, limit: int = 50) -> list[dict[str, Any]]:
         """Fetch domestic stock ranking sorted by trading amount.
 
         @param limit: Maximum rows to return.

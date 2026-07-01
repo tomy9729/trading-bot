@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -23,7 +22,7 @@ def _get_int(name: str, default: int) -> int:
     return int(value)
 
 
-def _get_optional_int(name: str) -> Optional[int]:
+def _get_optional_int(name: str) -> int | None:
     value = os.getenv(name)
     if value == "" or value is None:
         return None
@@ -45,7 +44,7 @@ class Settings:
     kis_account_product_code: str
     kis_is_mock: bool
     dry_run: bool
-    force_quantity: Optional[int]
+    force_quantity: int | None
     max_order_amount: int
     max_position_count: int
     daily_max_loss_rate: float
