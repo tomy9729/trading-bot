@@ -10,7 +10,15 @@ class MarketSnapshotBuilder:
     def __init__(self, strategy_config: StrategyConfig):
         self.strategy_config = strategy_config
 
-    def build(self, symbol: str, candles: Sequence[MinuteCandle], current_price: int | float, spread_rate: float, daily_rise_rate: float = 0.0) -> MarketSnapshot:
+    def build(
+        self,
+        symbol: str,
+        candles: Sequence[MinuteCandle],
+        current_price: int | float,
+        spread_rate: float,
+        daily_rise_rate: float = 0.0,
+        orderbook: dict[str, Any] | None = None,
+    ) -> MarketSnapshot:
         """Build a strategy snapshot from minute candles and quote data.
 
         @param symbol: Stock symbol.
@@ -18,6 +26,7 @@ class MarketSnapshotBuilder:
         @param current_price: Current price.
         @param spread_rate: Current spread rate.
         @param daily_rise_rate: Daily rise rate.
+        @param orderbook: Optional orderbook values.
         @returns: Market snapshot used by strategy functions.
         """
         ordered_candles = _sort_candles(candles)
@@ -50,6 +59,12 @@ class MarketSnapshotBuilder:
             execution_strength=_execution_strength(last_candle),
             market_direction_rate=_market_direction_rate(ordered_candles),
             volume_declining=_is_volume_declining(ordered_candles),
+            best_bid=_orderbook_value(orderbook, "best_bid"),
+            best_ask=_orderbook_value(orderbook, "best_ask"),
+            bid_quantity=_orderbook_value(orderbook, "bid_quantity"),
+            ask_quantity=_orderbook_value(orderbook, "ask_quantity"),
+            orderbook_depth_value=_orderbook_value(orderbook, "depth_value"),
+            orderbook_imbalance_rate=_orderbook_imbalance_rate(orderbook),
             candles=tuple(ordered_candles),
         )
 
@@ -127,6 +142,23 @@ def _is_volume_declining(candles: Sequence[MinuteCandle]) -> bool:
     if len(candles) < 3:
         return False
     return candles[-1].volume < candles[-2].volume < candles[-3].volume
+
+
+def _orderbook_value(orderbook: dict[str, Any] | None, key: str) -> float | None:
+    if not orderbook or orderbook.get(key) in (None, ""):
+        return None
+    return float(str(orderbook[key]).replace(",", ""))
+
+
+def _orderbook_imbalance_rate(orderbook: dict[str, Any] | None) -> float | None:
+    bid_quantity = _orderbook_value(orderbook, "bid_quantity")
+    ask_quantity = _orderbook_value(orderbook, "ask_quantity")
+    if bid_quantity is None or ask_quantity is None:
+        return None
+    total_quantity = bid_quantity + ask_quantity
+    if total_quantity <= 0:
+        return None
+    return ((bid_quantity - ask_quantity) / total_quantity) * 100
 
 
 def _to_int(row: dict[str, Any], names: tuple[str, ...]) -> int:

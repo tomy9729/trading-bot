@@ -32,13 +32,24 @@ def test_trading_safety_tuning_defaults_are_loaded():
     bot_config = load_bot_config()
 
     assert bot_config.strategy.max_breakout_chase_percent == 0.8
-    assert bot_config.risk.volume_drop_exit_min_hold_minutes == 2.0
+    assert bot_config.strategy.entry_mode == "breakout_only"
+    assert bot_config.strategy.conditional_relax_min_match_rate == 1.0
+    assert bot_config.strategy.relaxed_volume_multiplier == 1.75
+    assert bot_config.strategy.relaxed_vwap_hold_candles == 5
+    assert bot_config.strategy.pullback_enabled is False
+    assert bot_config.strategy.pullback_near_vwap_percent == 0.3
+    assert bot_config.risk.volume_drop_exit_min_hold_minutes == 5.0
     assert bot_config.risk.profit_protection_min_profit_amount == 0
-    assert bot_config.risk.profit_protection_min_hold_minutes == 2.0
+    assert bot_config.risk.profit_protection_min_hold_minutes == 5.0
     assert bot_config.risk.profit_protection_weak_signal_count == 2
     assert bot_config.risk.profit_protection_max_execution_strength == 30.0
     assert bot_config.risk.profit_protection_min_volume_multiplier == 1.0
     assert bot_config.risk.profit_protection_upper_wick_percent == 80.0
+    assert bot_config.risk.early_exit_enabled is True
+    assert bot_config.risk.orderbook_exit_enabled is False
+    assert bot_config.risk.weak_execution_exit_enabled is True
+    assert bot_config.risk.trailing_exit_enabled is True
+    assert bot_config.cost.realized_pnl_difference_tolerance == 500
 
 
 def test_bot_config_rejects_invalid_stop_loss():

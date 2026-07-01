@@ -35,6 +35,16 @@ class StrategyConfig:
     market_down_block_threshold_percent: float
     vwap_entry_price_ratio: float = 1.0
     max_breakout_chase_percent: float = 0.8
+    entry_mode: str = "breakout_only"
+    conditional_relax_min_match_rate: float = 0.88
+    relaxed_volume_multiplier: float = 0.84
+    relaxed_vwap_hold_candles: int = 2
+    pullback_enabled: bool = False
+    pullback_near_vwap_percent: float = 0.3
+    pullback_max_depth_percent: float = 1.2
+    pullback_volume_cooldown_ratio: float = 0.8
+    pullback_rebound_confirm_percent: float = 0.2
+    pullback_min_execution_strength: float = 55.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,21 @@ class RiskConfig:
     profit_protection_max_execution_strength: float = 30.0
     profit_protection_min_volume_multiplier: float = 1.0
     profit_protection_upper_wick_percent: float = 80.0
+    early_exit_enabled: bool = False
+    early_exit_check_seconds: int = 180
+    early_exit_min_profit_percent: float = 0.1
+    orderbook_exit_enabled: bool = False
+    orderbook_exit_max_spread_percent: float = 0.5
+    orderbook_exit_min_depth_value: float = 5000000
+    orderbook_exit_min_imbalance_rate: float = -30.0
+    weak_execution_exit_enabled: bool = False
+    weak_execution_exit_strength: float = 35.0
+    weak_execution_exit_min_profit_percent: float = 0.2
+    trailing_exit_enabled: bool = False
+    trailing_start_profit_percent: float = 0.7
+    trailing_drawdown_percent: float = 0.3
+    pullback_stop_loss_percent: float = -0.6
+    pullback_vwap_breakdown_percent: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -68,6 +93,7 @@ class TradingCostConfig:
     sell_fee_percent: float
     sell_tax_percent: float
     slippage_percent: float
+    realized_pnl_difference_tolerance: float = 500.0
 
 
 @dataclass(frozen=True)
@@ -145,6 +171,16 @@ def load_bot_config(path: str | Path | None = None) -> BotConfig:
             market_down_block_threshold_percent=float(strategy.get("market_down_block_threshold_percent", -0.5)),
             vwap_entry_price_ratio=_get_positive_float_env("VWAP_ENTRY_PRICE_RATIO", 1.0),
             max_breakout_chase_percent=float(strategy.get("max_breakout_chase_percent", 0.8)),
+            entry_mode=str(strategy.get("entry_mode", "breakout_only")),
+            conditional_relax_min_match_rate=float(strategy.get("conditional_relax_min_match_rate", 0.88)),
+            relaxed_volume_multiplier=float(strategy.get("relaxed_volume_multiplier", 0.84)),
+            relaxed_vwap_hold_candles=int(strategy.get("relaxed_vwap_hold_candles", 2)),
+            pullback_enabled=bool(strategy.get("pullback_enabled", False)),
+            pullback_near_vwap_percent=float(strategy.get("pullback_near_vwap_percent", 0.3)),
+            pullback_max_depth_percent=float(strategy.get("pullback_max_depth_percent", 1.2)),
+            pullback_volume_cooldown_ratio=float(strategy.get("pullback_volume_cooldown_ratio", 0.8)),
+            pullback_rebound_confirm_percent=float(strategy.get("pullback_rebound_confirm_percent", 0.2)),
+            pullback_min_execution_strength=float(strategy.get("pullback_min_execution_strength", 55.0)),
         ),
         risk=RiskConfig(
             enforce_daily_loss_limit=bool(risk.get("enforce_daily_loss_limit", True)),
@@ -168,12 +204,28 @@ def load_bot_config(path: str | Path | None = None) -> BotConfig:
             profit_protection_max_execution_strength=float(risk.get("profit_protection_max_execution_strength", 30.0)),
             profit_protection_min_volume_multiplier=float(risk.get("profit_protection_min_volume_multiplier", 1.0)),
             profit_protection_upper_wick_percent=float(risk.get("profit_protection_upper_wick_percent", 80.0)),
+            early_exit_enabled=bool(risk.get("early_exit_enabled", False)),
+            early_exit_check_seconds=int(risk.get("early_exit_check_seconds", 180)),
+            early_exit_min_profit_percent=float(risk.get("early_exit_min_profit_percent", 0.1)),
+            orderbook_exit_enabled=bool(risk.get("orderbook_exit_enabled", False)),
+            orderbook_exit_max_spread_percent=float(risk.get("orderbook_exit_max_spread_percent", 0.5)),
+            orderbook_exit_min_depth_value=float(risk.get("orderbook_exit_min_depth_value", 5000000)),
+            orderbook_exit_min_imbalance_rate=float(risk.get("orderbook_exit_min_imbalance_rate", -30.0)),
+            weak_execution_exit_enabled=bool(risk.get("weak_execution_exit_enabled", False)),
+            weak_execution_exit_strength=float(risk.get("weak_execution_exit_strength", 35.0)),
+            weak_execution_exit_min_profit_percent=float(risk.get("weak_execution_exit_min_profit_percent", 0.2)),
+            trailing_exit_enabled=bool(risk.get("trailing_exit_enabled", False)),
+            trailing_start_profit_percent=float(risk.get("trailing_start_profit_percent", 0.7)),
+            trailing_drawdown_percent=float(risk.get("trailing_drawdown_percent", 0.3)),
+            pullback_stop_loss_percent=float(risk.get("pullback_stop_loss_percent", -0.6)),
+            pullback_vwap_breakdown_percent=float(risk.get("pullback_vwap_breakdown_percent", 0.2)),
         ),
         cost=TradingCostConfig(
             buy_fee_percent=float(cost.get("buy_fee_percent", 0.015)),
             sell_fee_percent=float(cost.get("sell_fee_percent", 0.015)),
             sell_tax_percent=float(cost.get("sell_tax_percent", 0.2)),
             slippage_percent=float(cost.get("slippage_percent", 0.05)),
+            realized_pnl_difference_tolerance=float(cost.get("realized_pnl_difference_tolerance", 500.0)),
         ),
         watchlist=WatchlistConfig(
             kr=KrWatchlistConfig(
@@ -231,6 +283,16 @@ def validate_bot_config(bot_config: BotConfig) -> None:
         raise ValueError("risk.profit_protection_min_volume_multiplier must be greater than or equal to 0")
     if bot_config.risk.profit_protection_upper_wick_percent < 0:
         raise ValueError("risk.profit_protection_upper_wick_percent must be greater than or equal to 0")
+    if bot_config.risk.early_exit_check_seconds < 0:
+        raise ValueError("risk.early_exit_check_seconds must be greater than or equal to 0")
+    if bot_config.risk.orderbook_exit_max_spread_percent < 0:
+        raise ValueError("risk.orderbook_exit_max_spread_percent must be greater than or equal to 0")
+    if bot_config.risk.orderbook_exit_min_depth_value < 0:
+        raise ValueError("risk.orderbook_exit_min_depth_value must be greater than or equal to 0")
+    if bot_config.risk.trailing_start_profit_percent < 0:
+        raise ValueError("risk.trailing_start_profit_percent must be greater than or equal to 0")
+    if bot_config.risk.trailing_drawdown_percent < 0:
+        raise ValueError("risk.trailing_drawdown_percent must be greater than or equal to 0")
     if bot_config.cost.buy_fee_percent < 0:
         raise ValueError("cost.buy_fee_percent must be greater than or equal to 0")
     if bot_config.cost.sell_fee_percent < 0:
@@ -239,12 +301,36 @@ def validate_bot_config(bot_config: BotConfig) -> None:
         raise ValueError("cost.sell_tax_percent must be greater than or equal to 0")
     if bot_config.cost.slippage_percent < 0:
         raise ValueError("cost.slippage_percent must be greater than or equal to 0")
+    if bot_config.cost.realized_pnl_difference_tolerance < 0:
+        raise ValueError("cost.realized_pnl_difference_tolerance must be greater than or equal to 0")
     if bot_config.strategy.volume_multiplier <= 0:
         raise ValueError("strategy.volume_multiplier must be greater than 0")
     if bot_config.strategy.vwap_entry_price_ratio <= 0:
         raise ValueError("strategy.vwap_entry_price_ratio must be greater than 0")
     if bot_config.strategy.max_breakout_chase_percent < 0:
         raise ValueError("strategy.max_breakout_chase_percent must be greater than or equal to 0")
+    if bot_config.strategy.entry_mode not in {"breakout_only", "pullback_only", "breakout_or_pullback"}:
+        raise ValueError("strategy.entry_mode must be breakout_only, pullback_only, or breakout_or_pullback")
+    if not 0 <= bot_config.strategy.conditional_relax_min_match_rate <= 1:
+        raise ValueError("strategy.conditional_relax_min_match_rate must be between 0 and 1")
+    if bot_config.strategy.relaxed_volume_multiplier <= 0:
+        raise ValueError("strategy.relaxed_volume_multiplier must be greater than 0")
+    if bot_config.strategy.relaxed_volume_multiplier > bot_config.strategy.volume_multiplier:
+        raise ValueError("strategy.relaxed_volume_multiplier must be less than or equal to strategy.volume_multiplier")
+    if bot_config.strategy.relaxed_vwap_hold_candles < 0:
+        raise ValueError("strategy.relaxed_vwap_hold_candles must be greater than or equal to 0")
+    if bot_config.strategy.relaxed_vwap_hold_candles > bot_config.strategy.vwap_hold_candles:
+        raise ValueError("strategy.relaxed_vwap_hold_candles must be less than or equal to strategy.vwap_hold_candles")
+    if bot_config.strategy.pullback_near_vwap_percent < 0:
+        raise ValueError("strategy.pullback_near_vwap_percent must be greater than or equal to 0")
+    if bot_config.strategy.pullback_max_depth_percent < 0:
+        raise ValueError("strategy.pullback_max_depth_percent must be greater than or equal to 0")
+    if not 0 < bot_config.strategy.pullback_volume_cooldown_ratio <= 1:
+        raise ValueError("strategy.pullback_volume_cooldown_ratio must be greater than 0 and less than or equal to 1")
+    if bot_config.strategy.pullback_rebound_confirm_percent < 0:
+        raise ValueError("strategy.pullback_rebound_confirm_percent must be greater than or equal to 0")
+    if bot_config.strategy.pullback_min_execution_strength < 0:
+        raise ValueError("strategy.pullback_min_execution_strength must be greater than or equal to 0")
     if bot_config.strategy.volume_lookback_minutes <= 0:
         raise ValueError("strategy.volume_lookback_minutes must be greater than 0")
     if bot_config.strategy.breakout_window_minutes <= 0:

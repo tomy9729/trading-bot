@@ -44,17 +44,18 @@ def analyze_missed_candidates(events: list[ReportEvent], bot_config: BotConfig) 
     @returns: Missed buy candidate analysis.
     """
     buy_checks = [event for event in events if event.event_type == "BUY_CONDITION_CHECKED"]
+    buy_fills = [event for event in events if event.event_type == "BUY_ORDER_FILLED"]
     candidates = []
     for event in buy_checks:
-        if event.data.get("allowed") is True:
-            continue
         details = _details(event)
         symbol = str(details.get("symbol") or event.data.get("symbol") or "")
         if not symbol:
             continue
+        if event.data.get("allowed") is True and _has_later_buy_fill(symbol, event, buy_fills):
+            continue
         price = _to_float(details.get("current_price"))
         satisfied, failed = _evaluate_conditions(details, str(event.data.get("reason") or ""), bot_config)
-        if not _is_missed_candidate(satisfied, failed, str(event.data.get("reason") or "")):
+        if not _is_missed_candidate(satisfied, failed, str(event.data.get("reason") or ""), event.data.get("allowed") is True):
             continue
         later_prices = [
             _to_float(_details(later_event).get("current_price"))
@@ -69,6 +70,10 @@ def analyze_missed_candidates(events: list[ReportEvent], bot_config: BotConfig) 
             later_prices[-1] if later_prices else None,
             max(later_prices) if later_prices else None,
             quantity,
+            buy_fee_percent=bot_config.cost.buy_fee_percent,
+            sell_fee_percent=bot_config.cost.sell_fee_percent,
+            sell_tax_percent=bot_config.cost.sell_tax_percent,
+            sell_slippage_percent=bot_config.cost.slippage_percent,
         )
         candidates.append(
             MissedTradeCandidate(
@@ -89,7 +94,9 @@ def analyze_missed_candidates(events: list[ReportEvent], bot_config: BotConfig) 
     return sorted(candidates, key=_candidate_sort_key, reverse=True)[:20]
 
 
-def _is_missed_candidate(satisfied: list[str], failed: list[str], reason: str) -> bool:
+def _is_missed_candidate(satisfied: list[str], failed: list[str], reason: str, allowed: bool) -> bool:
+    if allowed:
+        return True
     candidate_reasons = {
         "VOLUME_SPIKE_NOT_ENOUGH",
         "VWAP_HOLD_NOT_CONFIRMED",
@@ -103,6 +110,21 @@ def _is_missed_candidate(satisfied: list[str], failed: list[str], reason: str) -
         "UPPER_WICK_TOO_LONG",
     }
     return reason in candidate_reasons or (len(satisfied) >= 4 and len(failed) > 0)
+
+
+def _has_later_buy_fill(symbol: str, event: ReportEvent, buy_fills: list[ReportEvent]) -> bool:
+    """Check whether a buy signal has a later actual fill.
+
+    @param symbol: Candidate symbol.
+    @param event: Buy signal event.
+    @param buy_fills: Parsed buy fill events.
+    @returns: True when a later buy fill exists for the same symbol.
+    """
+    for buy_fill in buy_fills:
+        fill_symbol = str(buy_fill.data.get("symbol") or "")
+        if fill_symbol == symbol and buy_fill.timestamp >= event.timestamp:
+            return True
+    return False
 
 
 def _evaluate_conditions(details: dict[str, Any], reason: str, bot_config: BotConfig) -> tuple[list[str], list[str]]:

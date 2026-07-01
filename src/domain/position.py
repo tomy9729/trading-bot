@@ -9,6 +9,9 @@ class Position:
     quantity: int | float
     average_price: int | float
     entry_time: datetime
+    entry_reason: str | None = None
+    stop_reference_price: int | float | None = None
+    peak_price: int | float | None = None
 
 
 @dataclass(frozen=True)

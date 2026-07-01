@@ -63,6 +63,28 @@ def test_missed_candidate_and_markdown_include_adjustment(tmp_path):
     assert "매수될 뻔한 후보 분석" in markdown
 
 
+def test_structured_strategy_decision_without_fill_becomes_missed_candidate(tmp_path):
+    log_path = tmp_path / "trade_events_20260616.jsonl"
+    log_path.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-06-16T09:00:00+09:00","event_type":"strategy_decision","side":"BUY","symbol":"005930","symbol_name":"Samsung","decision":{"action":"BUY","allowed":true,"reason":"VWAP_HOLD_VOLUME_BREAKOUT_MARKET_CONFIRMED"},"strategy_values":{"symbol":"005930","current_price":1000,"vwap":990,"recent_high":995,"spread_rate":0.1,"execution_strength":100.0,"vwap_hold_candle_count":3,"upper_wick_rate":0.0,"market_direction_rate":0.2,"volume_declining":false,"volume_multiplier":3.0}}',
+                '{"timestamp":"2026-06-16T09:01:00+09:00","event_type":"strategy_decision","side":"BUY","symbol":"005930","symbol_name":"Samsung","decision":{"action":"HOLD","allowed":false,"reason":"BREAKOUT_FAILED"},"strategy_values":{"symbol":"005930","current_price":1020,"vwap":990,"recent_high":1020,"spread_rate":0.1,"execution_strength":100.0,"vwap_hold_candle_count":3,"upper_wick_rate":0.0,"market_direction_rate":0.2,"volume_declining":false,"volume_multiplier":3.0}}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    events = parse_log_file(log_path)
+    candidates = analyze_missed_candidates(events, load_bot_config())
+
+    assert events[0].event_type == "BUY_CONDITION_CHECKED"
+    assert events[0].data["allowed"] is True
+    assert candidates
+    assert candidates[0].symbol == "005930"
+    assert round(candidates[0].simulation.neutral_return_rate, 4) == 1.7144
+
+
 def test_report_includes_strategy_and_pnl_reconciliation():
     analysis = analyze_trades([])
 
@@ -79,10 +101,12 @@ def test_report_includes_strategy_and_pnl_reconciliation():
         strategy_metadata={
             "strategy_name": "vwap-volume-breakout",
             "strategy_version": "abc123def456",
+            "realized_pnl_difference_tolerance": 100,
         },
     )
 
     assert "## 2. 운영 정합성" in markdown
     assert "전략 버전: abc123def456" in markdown
     assert "실현손익 차이: -50" in markdown
-    assert "손익 정합성: 확인 필요" in markdown
+    assert "실현손익 허용오차: 100" in markdown
+    assert "손익 정합성: 허용 범위" in markdown

@@ -46,6 +46,15 @@ def get_default_log_path(report_date: str) -> Path:
     return get_log_dir() / f"trade_{report_date.replace('-', '')}.log"
 
 
+def get_default_event_log_path(report_date: str) -> Path:
+    """Create the default structured trade event log path for a report date.
+
+    @param report_date: Normalized YYYY-MM-DD date.
+    @returns: logs/trade_events_YYYYMMDD.jsonl path.
+    """
+    return get_log_dir() / f"trade_events_{report_date.replace('-', '')}.jsonl"
+
+
 def parse_log_file(log_path: Path) -> list[ReportEvent]:
     """Parse text or JSON Lines trading logs.
 
@@ -97,8 +106,46 @@ def _parse_json_event(text: str) -> ReportEvent | None:
     if timestamp_value is None:
         return None
     timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
+    normalized_event_type, data = _normalize_json_event(event_type, payload)
+    return ReportEvent(timestamp=timestamp.replace(tzinfo=None), event_type=normalized_event_type, message=text, data=data)
+
+
+def _normalize_json_event(event_type: str, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Normalize structured JSONL events to report analyzer event contracts.
+
+    @param event_type: Raw structured event type.
+    @param payload: Structured event payload.
+    @returns: Normalized report event type and data.
+    """
+    if event_type != "strategy_decision":
+        return event_type, dict(payload)
+
+    side = str(payload.get("side") or "")
+    decision = payload.get("decision")
+    strategy_values = payload.get("strategy_values")
+    market_snapshot = payload.get("market_snapshot")
     data = dict(payload)
-    return ReportEvent(timestamp=timestamp.replace(tzinfo=None), event_type=event_type, message=text, data=data)
+    if isinstance(decision, dict):
+        data.update(
+            {
+                "signal": decision.get("action"),
+                "allowed": decision.get("allowed"),
+                "reason": decision.get("reason") or decision.get("skip_reason"),
+            }
+        )
+    data["name"] = payload.get("symbol_name")
+    if isinstance(strategy_values, dict):
+        data["details"] = strategy_values
+        data.update({f"detail_{key}": value for key, value in strategy_values.items()})
+    elif isinstance(market_snapshot, dict):
+        data["details"] = market_snapshot
+        data.update({f"detail_{key}": value for key, value in market_snapshot.items()})
+
+    if side == "BUY":
+        return "BUY_CONDITION_CHECKED", data
+    if side == "SELL":
+        return "SELL_CONDITION_CHECKED", data
+    return event_type, data
 
 
 def _get_text_event_type(message: str) -> str:

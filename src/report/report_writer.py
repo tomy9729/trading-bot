@@ -85,6 +85,10 @@ def create_report_markdown(
         f"- 최대 손실 거래: {analysis.summary.worst_trade}",
         f"- 평균 보유 시간: {_format_minutes(analysis.summary.average_hold_minutes)}",
         "",
+        "## Expected Profit Simulation",
+        "",
+        _expected_profit_summary(missed_candidates),
+        "",
         "## 2. 운영 정합성",
         "",
         _operation_reconciliation(account_snapshot, strategy_metadata),
@@ -162,6 +166,7 @@ def _operation_reconciliation(
     strategy_metadata: dict[str, Any] | None,
 ) -> str:
     lines = []
+    tolerance = _to_float(strategy_metadata.get("realized_pnl_difference_tolerance")) if strategy_metadata else None
     if strategy_metadata:
         lines.extend(
             [
@@ -171,16 +176,68 @@ def _operation_reconciliation(
         )
     if account_snapshot:
         difference = account_snapshot.get("realized_pnl_difference")
+        reconciliation_status = _pnl_reconciliation_status(difference, tolerance)
         lines.extend(
             [
                 f"- 내부 계산 실현손익: {_format_money(account_snapshot.get('daily_realized_pnl'))}",
                 f"- 증권사 실현손익: {_format_money(account_snapshot.get('broker_daily_realized_pnl'))}",
                 f"- 실현손익 차이: {_format_money(difference)}",
+                f"- 실현손익 허용오차: {_format_money(tolerance)}",
                 f"- 누적 거래비용: {_format_money(account_snapshot.get('cumulative_cost'))}",
-                f"- 손익 정합성: {'일치' if difference == 0 else '확인 필요'}",
+                f"- 손익 정합성: {reconciliation_status}",
             ]
         )
     return "\n".join(lines) if lines else ANALYSIS_UNAVAILABLE
+
+
+def _expected_profit_summary(candidates: list[MissedTradeCandidate]) -> str:
+    if not candidates:
+        return ANALYSIS_UNAVAILABLE
+    neutral_values = [
+        candidate.simulation.neutral_profit_loss
+        for candidate in candidates
+        if candidate.simulation.neutral_profit_loss is not None
+    ]
+    neutral_rates = [
+        candidate.simulation.neutral_return_rate
+        for candidate in candidates
+        if candidate.simulation.neutral_return_rate is not None
+    ]
+    if not neutral_values:
+        return ANALYSIS_UNAVAILABLE
+    wins = [value for value in neutral_values if value > 0]
+    best = max(
+        candidates,
+        key=lambda candidate: candidate.simulation.neutral_profit_loss
+        if candidate.simulation.neutral_profit_loss is not None
+        else float("-inf"),
+    )
+    return "\n".join(
+        [
+            f"- Expected candidate count: {len(neutral_values)}",
+            f"- Expected net profit per 1 share: {_format_money(sum(neutral_values))}",
+            f"- Expected average return: {_format_percent(sum(neutral_rates) / len(neutral_rates)) if neutral_rates else ANALYSIS_UNAVAILABLE}",
+            f"- Expected win rate: {_format_percent((len(wins) / len(neutral_values)) * 100)}",
+            f"- Best expected candidate: {best.symbol} {_format_money(best.simulation.neutral_profit_loss)} / {_format_percent(best.simulation.neutral_return_rate)}",
+        ]
+    )
+
+
+def _pnl_reconciliation_status(difference: Any, tolerance: float | None) -> str:
+    """Create a PnL reconciliation status.
+
+    @param difference: Internal minus broker realized PnL.
+    @param tolerance: Allowed absolute difference.
+    @returns: Reconciliation status text.
+    """
+    value = _to_float(difference)
+    if value is None:
+        return "확인 필요"
+    if value == 0:
+        return "일치"
+    if tolerance is not None and abs(value) <= tolerance:
+        return "허용 범위"
+    return "확인 필요"
 
 
 def _strategy_analysis(analysis: ReportAnalysis) -> str:
@@ -272,6 +329,15 @@ def _format_money(value: Any) -> str:
     if value is None:
         return ANALYSIS_UNAVAILABLE
     return f"{float(value):,.0f}"
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _format_number(value: Any) -> str:

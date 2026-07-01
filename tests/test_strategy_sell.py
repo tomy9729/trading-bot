@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from dataclasses import replace
 
 from src.domain.market_data import MarketSnapshot
 from src.domain.position import Position
@@ -76,6 +77,8 @@ def test_volume_decline_does_not_exit_when_estimated_net_profit_is_negative():
     assert signal.reason == "EXIT_CONDITION_NOT_MET"
     assert signal.details["gross_profit_rate"] == 0.1
     assert signal.details["net_profit_rate"] < 0
+    assert "exit_diagnostics" in signal.details
+    assert signal.details["exit_diagnostics"]["vwap_breakdown_gap"] == 2
 
 
 def test_volume_decline_does_not_exit_when_estimated_net_profit_is_positive():
@@ -183,3 +186,64 @@ def test_volume_decline_reason_remains_when_profit_protection_is_not_weak_enough
 
     assert signal.allowed is True
     assert signal.reason == "VOLUME_DROPPED_AFTER_BREAKOUT"
+
+
+def test_early_exit_detects_failed_entry_after_check_window():
+    now = datetime(2026, 1, 1, 10, 5)
+    config = load_bot_config()
+    signal = ExitSignal(config).evaluate(
+        Position("005930", 1, 1000, now - timedelta(seconds=config.risk.early_exit_check_seconds + 1)),
+        _market(current_price=1001, vwap=1000, execution_strength=20.0),
+        now,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "EARLY_EXIT_NO_MOMENTUM"
+
+
+def test_orderbook_weakening_triggers_exit():
+    config = load_bot_config()
+    config = replace(config, risk=replace(config.risk, stop_loss_percent=-5.0))
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(config).evaluate(
+        Position("005930", 1, 1000, now - timedelta(minutes=1)),
+        _market(
+            current_price=1002,
+            vwap=999,
+            spread_rate=0.6,
+            orderbook_depth_value=1_000_000,
+            orderbook_imbalance_rate=-40.0,
+        ),
+        now,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "ORDERBOOK_WEAKENED"
+
+
+def test_trailing_profit_protection_exits_on_peak_drawdown():
+    config = load_bot_config()
+    config = replace(config, risk=replace(config.risk, stop_loss_percent=-5.0))
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(config).evaluate(
+        Position("005930", 1, 1000, now - timedelta(minutes=4), peak_price=1020),
+        _market(current_price=1010, vwap=999, execution_strength=80.0),
+        now,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "TRAILING_PROFIT_PROTECTION"
+
+
+def test_pullback_position_exits_when_stop_reference_breaks():
+    config = load_bot_config()
+    config = replace(config, risk=replace(config.risk, stop_loss_percent=-5.0))
+    now = datetime(2026, 1, 1, 10, 0)
+    signal = ExitSignal(config).evaluate(
+        Position("005930", 1, 1000, now - timedelta(minutes=1), "PULLBACK_REENTRY", 998),
+        _market(current_price=997, vwap=1000, execution_strength=70.0),
+        now,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "PULLBACK_STOP_LOSS"

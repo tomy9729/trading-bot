@@ -206,7 +206,13 @@ class AutoTradingRunner:
                 snapshot,
             )
             return
-        self._place_domestic_buy(symbol, quantity, snapshot.current_price)
+        self._place_domestic_buy(
+            symbol,
+            quantity,
+            snapshot.current_price,
+            signal.reason,
+            signal.details.get("stop_reference_price"),
+        )
 
     def _handle_domestic_sell(self, position: Position, snapshot) -> None:
         if position.quantity <= 0:
@@ -221,6 +227,7 @@ class AutoTradingRunner:
             self.logger.info("[SELL SKIP] market=KR symbol=%s reason=ORDER_LOCKED", position.symbol)
             self._write_skip_event("KR", position.symbol, self._get_symbol_name("KR", position.symbol), "ORDER_LOCKED", snapshot=snapshot)
             return
+        position = self._update_position_peak(position, snapshot.current_price)
         signal = self.exit_signal.evaluate(
             position,
             snapshot,
@@ -233,8 +240,15 @@ class AutoTradingRunner:
         if signal.allowed:
             self._place_domestic_exit(position.symbol, position.quantity, signal.reason)
 
-    def _place_domestic_buy(self, symbol: str, quantity: int, price: int) -> None:
-        self.order_execution_service.place_buy(self.state, symbol, quantity, price)
+    def _place_domestic_buy(
+        self,
+        symbol: str,
+        quantity: int,
+        price: int,
+        entry_reason: str | None = None,
+        stop_reference_price: int | float | None = None,
+    ) -> None:
+        self.order_execution_service.place_buy(self.state, symbol, quantity, price, entry_reason, stop_reference_price)
 
     def _place_domestic_exit(self, symbol: str, quantity: int, reason: str) -> None:
         self.order_execution_service.place_exit(self.state, symbol, quantity, reason)
@@ -244,7 +258,7 @@ class AutoTradingRunner:
         candles = parse_domestic_candles(rows)
         price = self._call_with_retries(lambda: self.domestic_market.get_current_price(symbol), "current_price", symbol)
         orderbook = self._call_with_retries(lambda: self.domestic_market.get_orderbook(symbol), "orderbook", symbol)
-        return self.snapshot_builder.build(symbol, candles, price, float(orderbook["spread_rate"]))
+        return self.snapshot_builder.build(symbol, candles, price, float(orderbook["spread_rate"]), orderbook=orderbook)
 
     def _get_domestic_cycle_symbols(self) -> list[str]:
         symbols = list(dict.fromkeys(self.watchlist_manager.get_symbols("KR") + list(self.state.positions)))
@@ -424,6 +438,12 @@ class AutoTradingRunner:
             "upper_wick_rate": snapshot.upper_wick_rate,
             "market_direction_rate": snapshot.market_direction_rate,
             "volume_declining": snapshot.volume_declining,
+            "best_bid": snapshot.best_bid,
+            "best_ask": snapshot.best_ask,
+            "bid_quantity": snapshot.bid_quantity,
+            "ask_quantity": snapshot.ask_quantity,
+            "orderbook_depth_value": snapshot.orderbook_depth_value,
+            "orderbook_imbalance_rate": snapshot.orderbook_imbalance_rate,
             "candles": [
                 {
                     "timestamp": candle.timestamp,
@@ -495,6 +515,20 @@ class AutoTradingRunner:
         if getattr(self, "_state_date", today) != today:
             self.state = AutoTradingState()
         self._state_date = today
+
+    def _update_position_peak(self, position: Position, current_price: int | float) -> Position:
+        peak_price = max(float(position.peak_price or position.average_price), float(current_price))
+        updated = Position(
+            position.symbol,
+            position.quantity,
+            position.average_price,
+            position.entry_time,
+            position.entry_reason,
+            position.stop_reference_price,
+            peak_price,
+        )
+        self.state.positions[position.symbol] = updated
+        return updated
 
 def _parse_hhmm(value: str, now: datetime) -> datetime:
     hour_text, minute_text = value.split(":", 1)

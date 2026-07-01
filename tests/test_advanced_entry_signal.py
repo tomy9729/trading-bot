@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from src.config.env import Settings
-from src.domain.market_data import MarketSnapshot
+from src.domain.market_data import MarketSnapshot, MinuteCandle
 from src.domain.position import PositionState
 from src.risk.risk_manager import RiskManager, RiskState
 from src.strategy.advanced_signals import EntrySignal, MarketFilter, SymbolFilter
@@ -75,3 +75,104 @@ def test_upper_wick_filter_keeps_diagnostic_values():
     assert signal.reason == "UPPER_WICK_TOO_LONG"
     assert signal.details["max_upper_wick_percent"] == 60.0
     assert signal.details["upper_wick_excess_percent"] == 1.0
+
+
+def test_entry_allows_one_miss_relaxed_volume_spike_candidate():
+    config = replace(
+        _bot_config(),
+        strategy=replace(
+            _bot_config().strategy,
+            volume_multiplier=2.0,
+            relaxed_volume_multiplier=0.84,
+            relaxed_vwap_hold_candles=2,
+        ),
+    )
+
+    signal = _evaluate(_snapshot(one_minute_volume=900), config)
+
+    assert signal.allowed is True
+    assert signal.reason == "CONDITIONAL_RELAXED_VOLUME_SPIKE"
+    assert signal.details["relaxed_conditions"] == ("VOLUME_SPIKE",)
+
+
+def test_entry_allows_one_miss_relaxed_vwap_hold_candidate():
+    config = replace(
+        _bot_config(),
+        strategy=replace(
+            _bot_config().strategy,
+            vwap_hold_candles=5,
+            relaxed_vwap_hold_candles=2,
+        ),
+    )
+
+    signal = _evaluate(_snapshot(vwap_hold_candle_count=2), config)
+
+    assert signal.allowed is True
+    assert signal.reason == "CONDITIONAL_RELAXED_VWAP_HOLD"
+    assert signal.details["relaxed_conditions"] == ("VWAP_HOLD",)
+
+
+def test_entry_blocks_when_multiple_conditions_need_relaxation():
+    config = replace(
+        _bot_config(),
+        strategy=replace(
+            _bot_config().strategy,
+            volume_multiplier=2.0,
+            relaxed_volume_multiplier=0.84,
+            vwap_hold_candles=5,
+            relaxed_vwap_hold_candles=2,
+        ),
+    )
+
+    signal = _evaluate(_snapshot(one_minute_volume=900, vwap_hold_candle_count=2), config)
+
+    assert signal.allowed is False
+    assert signal.reason == "MULTIPLE_RELAXED_CONDITIONS"
+
+
+def test_entry_allows_pullback_reentry_near_vwap():
+    config = replace(
+        _bot_config(),
+        strategy=replace(
+            _bot_config().strategy,
+            entry_mode="breakout_or_pullback",
+            pullback_enabled=True,
+            pullback_near_vwap_percent=0.5,
+            pullback_max_depth_percent=2.0,
+            pullback_volume_cooldown_ratio=0.8,
+        ),
+    )
+    candles = (
+        MinuteCandle("1", 1000, 1010, 990, 1005, 1000),
+        MinuteCandle("2", 1005, 1020, 1000, 1018, 1000),
+        MinuteCandle("3", 1010, 1014, 1004, 1012, 600),
+    )
+
+    signal = _evaluate(
+        _snapshot(
+            current_price=1002,
+            vwap=1000,
+            recent_high=1020,
+            one_minute_volume=600,
+            previous_five_minute_average_volume=1000,
+            execution_strength=70.0,
+            candles=candles,
+        ),
+        config,
+    )
+
+    assert signal.allowed is True
+    assert signal.reason == "PULLBACK_REENTRY"
+    assert signal.details["entry_reason"] == "PULLBACK_REENTRY"
+
+
+def test_pullback_only_blocks_breakout_chase():
+    config = replace(
+        _bot_config(),
+        strategy=replace(_bot_config().strategy, entry_mode="pullback_only", pullback_enabled=True),
+    )
+
+    signal = _evaluate(_snapshot(current_price=1008, recent_high=1000), config)
+
+    assert signal.allowed is False
+    assert signal.reason == "NOT_CHASING_BREAKOUT"

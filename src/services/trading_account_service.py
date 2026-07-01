@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -10,6 +11,16 @@ from src.domain.position import Position
 from src.logs.trade_logger import write_trade_event
 from src.risk.trading_cost import calculate_trade_cost_result
 from src.runner.auto_trading_state import AutoTradingState
+
+
+@dataclass(frozen=True)
+class OrderExecutionSummary:
+    status: str
+    filled_quantity: int
+    average_price: float
+    unfilled_quantity: int
+    order_id: str | None = None
+    executed_at: datetime | None = None
 
 
 class TradingAccountService:
@@ -250,6 +261,8 @@ class TradingAccountService:
                 "daily_realized_pnl": float(state.daily_realized_pnl),
                 "broker_daily_realized_pnl": broker_daily_realized_pnl,
                 "realized_pnl_difference": realized_pnl_difference,
+                "realized_pnl_difference_tolerance": self.bot_config.cost.realized_pnl_difference_tolerance,
+                "realized_pnl_difference_within_tolerance": abs(realized_pnl_difference) <= self.bot_config.cost.realized_pnl_difference_tolerance,
                 "cumulative_cost": (
                     self.trade_repository.get_cumulative_execution_cost(now.strftime("%Y-%m-%d"))
                     if self.trade_repository is not None
@@ -269,7 +282,19 @@ class TradingAccountService:
             return
 
         if self.trade_repository is not None:
-            self.trade_repository.insert_account_snapshot(**snapshot, raw_json=summary, recorded_at=now)
+            self.trade_repository.insert_account_snapshot(
+                cash_balance=snapshot["cash_balance"],
+                available_cash=snapshot["available_cash"],
+                stock_value=snapshot["stock_value"],
+                total_asset=snapshot["total_asset"],
+                unrealized_pnl=snapshot["unrealized_pnl"],
+                daily_realized_pnl=snapshot["daily_realized_pnl"],
+                cumulative_cost=snapshot["cumulative_cost"],
+                broker_daily_realized_pnl=snapshot["broker_daily_realized_pnl"],
+                realized_pnl_difference=snapshot["realized_pnl_difference"],
+                raw_json=summary,
+                recorded_at=now,
+            )
         self.last_account_snapshot_at = now
         self.logger.info(
             "[ACCOUNT SNAPSHOT] total_asset=%s cash_balance=%s available_cash=%s stock_value=%s unrealized_pnl=%s daily_realized_pnl=%s cumulative_cost=%s",
@@ -282,7 +307,7 @@ class TradingAccountService:
             snapshot["cumulative_cost"],
         )
         write_trade_event("account_snapshot", {**self.event_context("KR"), **snapshot})
-        if snapshot["realized_pnl_difference"] != 0:
+        if not snapshot["realized_pnl_difference_within_tolerance"]:
             write_trade_event(
                 "realized_pnl_difference",
                 {
@@ -290,9 +315,72 @@ class TradingAccountService:
                     "internal_daily_realized_pnl": snapshot["daily_realized_pnl"],
                     "broker_daily_realized_pnl": snapshot["broker_daily_realized_pnl"],
                     "difference": snapshot["realized_pnl_difference"],
+                    "tolerance": snapshot["realized_pnl_difference_tolerance"],
                     **self.strategy_metadata,
                 },
             )
+
+    def get_order_execution_summary(
+        self,
+        order_response: dict[str, Any],
+        symbol: str,
+        side: str,
+        requested_quantity: int,
+        fallback_price: int | float = 0,
+    ) -> OrderExecutionSummary:
+        """Return actual execution quantity and price for a submitted order.
+
+        @param order_response: Broker order response.
+        @param symbol: Domestic stock code.
+        @param side: BUY or SELL.
+        @param requested_quantity: Requested order quantity.
+        @param fallback_price: Dry-run fallback fill price.
+        @returns: Execution summary.
+        """
+        order_id = _response_order_id(order_response)
+        if self.settings.dry_run:
+            return OrderExecutionSummary(
+                status="FILLED",
+                filled_quantity=requested_quantity,
+                average_price=float(fallback_price),
+                unfilled_quantity=0,
+                order_id=order_id,
+                executed_at=datetime.now(),
+            )
+        try:
+            rows = self.call_with_retries(self.domestic_account.get_today_executions, "confirm_order_execution", symbol)
+            open_orders = self.call_with_retries(self.domestic_account.get_open_orders, "confirm_open_order", symbol)
+        except Exception:
+            self.logger.exception("[ORDER EXECUTION CONFIRM FAILED] symbol=%s side=%s order_id=%s", symbol, side, order_id)
+            return OrderExecutionSummary("UNCERTAIN", 0, 0.0, requested_quantity, order_id)
+
+        matched_rows = [
+            row
+            for row in rows
+            if _row_symbol(row) == symbol
+            and _row_order_side(row) == side
+            and (order_id is None or _row_order_id(row) in {None, order_id})
+        ]
+        filled_quantity = sum(_row_execution_quantity(row) for row in matched_rows)
+        average_price = _weighted_average_execution_price(matched_rows)
+        unfilled_quantity = max(0, requested_quantity - filled_quantity)
+        has_open_order = any(
+            _row_symbol(row) == symbol
+            and _row_order_side(row) == side
+            and (order_id is None or _row_order_id(row) in {None, order_id})
+            for row in open_orders
+        )
+        status = _execution_status(filled_quantity, requested_quantity, has_open_order)
+        if status in {"FILLED", "PARTIALLY_FILLED"} and self.trade_repository is not None:
+            self.persist_execution_rows(matched_rows)
+        return OrderExecutionSummary(
+            status=status,
+            filled_quantity=min(filled_quantity, requested_quantity),
+            average_price=average_price or 0.0,
+            unfilled_quantity=unfilled_quantity,
+            order_id=order_id,
+            executed_at=max((_row_created_at(row) for row in matched_rows), default=datetime.now()),
+        )
 
     def reconcile_uncertain_order(
         self,
@@ -513,6 +601,39 @@ def _row_execution_quantity(row: dict[str, Any]) -> int:
 
 def _row_execution_price(row: dict[str, Any]) -> float | None:
     return _row_float(row, ("avg_prvs", "ccld_unpr", "ord_unpr", "price"))
+
+
+def _response_order_id(response: dict[str, Any]) -> str | None:
+    output = response.get("output")
+    if not isinstance(output, dict):
+        return None
+    value = output.get("ODNO") or output.get("odno") or output.get("SOR_ODNO") or response.get("order_id")
+    return str(value) if value not in (None, "") else None
+
+
+def _weighted_average_execution_price(rows: list[dict[str, Any]]) -> float | None:
+    total_quantity = 0
+    total_amount = 0.0
+    for row in rows:
+        quantity = _row_execution_quantity(row)
+        price = _row_execution_price(row)
+        if quantity < 1 or price is None:
+            continue
+        total_quantity += quantity
+        total_amount += quantity * price
+    if total_quantity <= 0:
+        return None
+    return total_amount / total_quantity
+
+
+def _execution_status(filled_quantity: int, requested_quantity: int, has_open_order: bool) -> str:
+    if filled_quantity >= requested_quantity:
+        return "FILLED"
+    if filled_quantity > 0:
+        return "PARTIALLY_FILLED" if has_open_order else "FILLED"
+    if has_open_order:
+        return "ACCEPTED"
+    return "UNCERTAIN"
 
 
 def _create_execution_financial_rows(

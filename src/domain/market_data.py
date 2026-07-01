@@ -29,4 +29,10 @@ class MarketSnapshot:
     execution_strength: float = 0.0
     market_direction_rate: float = 0.0
     volume_declining: bool = False
+    best_bid: int | float | None = None
+    best_ask: int | float | None = None
+    bid_quantity: int | float | None = None
+    ask_quantity: int | float | None = None
+    orderbook_depth_value: int | float | None = None
+    orderbook_imbalance_rate: float | None = None
     candles: Sequence[MinuteCandle] = ()

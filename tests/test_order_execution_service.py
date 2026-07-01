@@ -5,13 +5,14 @@ from src.broker.kis_client import KisApiError
 from src.domain.position import Position
 from src.runner.auto_trading_state import AutoTradingState
 from src.services.order_execution_service import OrderExecutionService
+from src.services.trading_account_service import OrderExecutionSummary
 
 from tests.test_auto_trading_runner import _bot_config, _settings
 
 
-def _service(order=None, account_service=None, activate_safe_mode=None):
+def _service(order=None, account_service=None, activate_safe_mode=None, settings=None):
     return OrderExecutionService(
-        _settings(),
+        settings or _settings(),
         _bot_config(),
         order or Mock(),
         account_service or Mock(),
@@ -36,6 +37,33 @@ def test_order_execution_service_places_buy_and_clears_locks():
     assert state.pending_order_symbols == set()
     assert state.order_locked_symbols == set()
     account_service.save_account_snapshot.assert_called_once_with(state, force=True)
+
+
+def test_order_execution_service_does_not_create_position_before_buy_fill():
+    order = Mock()
+    order.buy_market.return_value = {"output": {"ODNO": "123"}}
+    account_service = Mock()
+    account_service.get_order_execution_summary.return_value = OrderExecutionSummary("ACCEPTED", 0, 0.0, 1, "123")
+    state = AutoTradingState()
+
+    _service(order=order, account_service=account_service).place_buy(state, "005930", 1, 70000)
+
+    assert "005930" not in state.positions
+    assert state.daily_entry_count_by_symbol == {}
+
+
+def test_order_execution_service_creates_position_from_partial_buy_fill():
+    order = Mock()
+    order.buy_market.return_value = {"output": {"ODNO": "123"}}
+    account_service = Mock()
+    account_service.get_order_execution_summary.return_value = OrderExecutionSummary("PARTIALLY_FILLED", 2, 70100.0, 1, "123")
+    state = AutoTradingState()
+
+    _service(order=order, account_service=account_service).place_buy(state, "005930", 3, 70000, "PULLBACK_REENTRY", 69900)
+
+    assert state.positions["005930"].quantity == 2
+    assert state.positions["005930"].average_price == 70100.0
+    assert state.positions["005930"].entry_reason == "PULLBACK_REENTRY"
 
 
 def test_order_execution_service_activates_safe_mode_for_unresolved_order():

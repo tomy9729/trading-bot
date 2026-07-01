@@ -7,7 +7,13 @@ from src.config.strategy_metadata import create_strategy_metadata
 from src.db.repository import TradingRepository
 from src.report.missed_trade_analyzer import analyze_missed_candidates
 from src.report.report_analyzer import analyze_trades
-from src.report.report_parser import ReportEvent, get_default_log_path, parse_log_file, parse_report_date
+from src.report.report_parser import (
+    ReportEvent,
+    get_default_event_log_path,
+    get_default_log_path,
+    parse_log_file,
+    parse_report_date,
+)
 from src.report.report_writer import write_report
 
 
@@ -24,7 +30,7 @@ def run_report_command(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     report_date = parse_report_date(args.date)
-    log_path = Path(args.log_path) if args.log_path is not None else get_default_log_path(report_date)
+    log_path = Path(args.log_path) if args.log_path is not None else _get_default_report_log_path(report_date)
     events = parse_log_file(log_path)
     bot_config = load_bot_config()
     repository = TradingRepository()
@@ -33,19 +39,33 @@ def run_report_command(argv: list[str] | None = None) -> int:
     analysis_events = _replace_order_events_with_executions(events, execution_rows)
     analysis = analyze_trades(analysis_events, bot_config.cost)
     missed_candidates = analyze_missed_candidates(events, bot_config)
+    strategy_metadata = create_strategy_metadata(bot_config)
+    strategy_metadata["realized_pnl_difference_tolerance"] = bot_config.cost.realized_pnl_difference_tolerance
     report_path = write_report(
         report_date,
         analysis,
         missed_candidates,
         args.save,
         account_snapshot=account_snapshot,
-        strategy_metadata=create_strategy_metadata(bot_config),
+        strategy_metadata=strategy_metadata,
     )
     if report_path is not None:
         print(f"Report saved: {report_path}")
     elif not events:
         print(f"Log file not found or empty: {log_path}")
     return 0
+
+
+def _get_default_report_log_path(report_date: str) -> Path:
+    """Return the preferred report source log path.
+
+    @param report_date: Normalized YYYY-MM-DD date.
+    @returns: Structured event log path when present, otherwise text log path.
+    """
+    event_log_path = get_default_event_log_path(report_date)
+    if event_log_path.exists():
+        return event_log_path
+    return get_default_log_path(report_date)
 
 
 def _replace_order_events_with_executions(
